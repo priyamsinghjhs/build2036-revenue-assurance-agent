@@ -52,6 +52,17 @@ Host the Streamlit app on Render's free web service and call Cloudflare Workers 
 The free instance sleeps after 15 minutes of inactivity, so the first visit after a break can take about a minute. Render's ephemeral disk does not persist the DuckDB file; the app rebuilds the synthetic database on startup.
 
 
+## Cloudflare-native app (Workers Free)
+
+The public workers.dev URL now serves a graphical React + Worker + D1 app that covers the full payment-acquiring lifecycle (authorization, scheme settlement, bank/TRS, fees, POS terminals, APM, FX, pricing, payouts, chargebacks) with a 13-agent on-demand pipeline.
+
+- **Live:** https://build2036-revenue-assurance-agent.kalyanachakram.workers.dev
+- **Source:** `cloudflare/` (see `cloudflare/README.md`)
+- Dashboards are SQL-only. Agents run on demand and cache results in D1.
+- All demo data is synthetic.
+
+The Streamlit app on Render is unchanged and is not required for this URL.
+
 ## Deploy on Cloudflare Containers
 
 The same Streamlit app can run as a [Cloudflare Container](https://developers.cloudflare.com/containers/) behind a Worker, at `https://build2036-revenue-assurance-agent.kalyanachakram.workers.dev`.
