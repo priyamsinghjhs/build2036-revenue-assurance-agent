@@ -13,6 +13,7 @@ import {
   type AreaId,
 } from "./recon";
 import type { Env } from "./types";
+import { getDb, type AppDb } from "./pg";
 
 const JSON_HINT = "Reply with compact JSON only. No markdown fences, no prose outside JSON.";
 
@@ -36,7 +37,7 @@ function parseJson(text: string): Record<string, unknown> {
   return { raw: text };
 }
 
-async function priorOutputs(db: D1Database, runId: string) {
+async function priorOutputs(db: AppDb, runId: string) {
   const { results } = await db
     .prepare(
       "SELECT agent_id, domain, output_json FROM ra_agent_outputs WHERE run_id = ? ORDER BY created_at",
@@ -59,7 +60,7 @@ function safeParse(s: string): unknown {
 }
 
 export async function buildInput(env: Env, agentId: AgentId, scope: string, domain?: string, exceptionId?: string) {
-  const db = env.DB;
+  const db = getDb(env);
   if (agentId === "orchestrator") {
     const kpis = await kpiCounts(db);
     const areas = await summarizeAll(db);
@@ -85,6 +86,11 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
       recon_bank: ["bank_trs"],
       recon_apm: ["apm"],
       recon_fx: ["fx"],
+      recon_billing: ["billing"],
+      recon_invoicing: ["invoicing"],
+      recon_cash: ["cash_ar"],
+      recon_vendor: ["vendor"],
+      recon_gl: ["gl"],
     };
     const areas = map[agentId] ?? (domain ? [domain as AreaId] : []);
     const summaries = [];
@@ -125,6 +131,11 @@ export function systemPrompt(agentId: AgentId): string {
     recon_bank: reconSchema("bank_trs"),
     recon_apm: reconSchema("apm"),
     recon_fx: reconSchema("fx"),
+    recon_billing: reconSchema("billing"),
+    recon_invoicing: reconSchema("invoicing"),
+    recon_cash: reconSchema("cash_ar"),
+    recon_vendor: reconSchema("vendor"),
+    recon_gl: reconSchema("gl"),
     gap_detection: `{"severity":"critical|high|medium|low","themes":["short theme"],"priority_gaps":[{"exception_id":"","issue":"","amount":0,"priority":"high|medium|low"}],"narrative":"one sentence"}`,
     investigator: `{"root_cause":"short","evidence":["chip"],"affected":"who/what","confidence":0}`,
     action: `{"actions":[{"type":"dispute|recover|rebill|escalate|adjust|mark_known","target":"ref or merchant","amount":0,"currency":"INR","confidence":0,"rationale":"short"}]}`,
@@ -149,7 +160,7 @@ export async function runAgentStep(
   opts: { runId: string; agentId: AgentId; scope: string; domain?: string; exceptionId?: string },
 ) {
   const input = await buildInput(env, opts.agentId, opts.scope, opts.domain, opts.exceptionId);
-  const priors = await priorOutputs(env.DB, opts.runId);
+  const priors = await priorOutputs(getDb(env), opts.runId);
   const briefPriors = priors.slice(-4).map((p) => ({ agent: p.agent_id, output: p.output }));
   const user = JSON.stringify({ input, prior_agents: briefPriors }).slice(0, 6000);
   const prompt = `${systemPrompt(opts.agentId)}\n\nINPUT:\n${user}`;
@@ -162,7 +173,7 @@ export async function runAgentStep(
   }
   const outputId = crypto.randomUUID();
   const created = new Date().toISOString();
-  await env.DB.prepare(
+  await getDb(env).prepare(
     "INSERT INTO ra_agent_outputs (output_id, run_id, agent_id, domain, output_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
   )
     .bind(outputId, opts.runId, opts.agentId, opts.domain ?? null, JSON.stringify(output), created)
@@ -171,7 +182,7 @@ export async function runAgentStep(
   if (opts.agentId === "action") {
     const actions = Array.isArray(output.actions) ? (output.actions as Record<string, unknown>[]) : [];
     for (const act of actions) {
-      await env.DB.prepare(
+      await getDb(env).prepare(
         `INSERT INTO ra_action_queue (action_id, run_id, exception_id, action, amount, currency, confidence, rationale, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?)`,
       )
@@ -192,7 +203,7 @@ export async function runAgentStep(
   return { output_id: outputId, agent_id: opts.agentId, output, created_at: created };
 }
 
-export async function startRun(db: D1Database, scope: string) {
+export async function startRun(db: AppDb, scope: string) {
   const runId = crypto.randomUUID();
   const started = new Date().toISOString();
   await db
@@ -202,14 +213,14 @@ export async function startRun(db: D1Database, scope: string) {
   return { run_id: runId, started_at: started, status: "running" as const };
 }
 
-export async function completeRun(db: D1Database, runId: string) {
+export async function completeRun(db: AppDb, runId: string) {
   await db
     .prepare("UPDATE ra_agent_runs SET completed_at = ?, status = 'completed' WHERE run_id = ?")
     .bind(new Date().toISOString(), runId)
     .run();
 }
 
-export async function latestRun(db: D1Database, scope?: string) {
+export async function latestRun(db: AppDb, scope?: string) {
   const sql = scope
     ? "SELECT * FROM ra_agent_runs WHERE scope = ? ORDER BY started_at DESC LIMIT 1"
     : "SELECT * FROM ra_agent_runs ORDER BY started_at DESC LIMIT 1";
@@ -237,7 +248,7 @@ export async function latestRun(db: D1Database, scope?: string) {
   };
 }
 
-export async function listActions(db: D1Database, limit = 50) {
+export async function listActions(db: AppDb, limit = 50) {
   const { results } = await db
     .prepare("SELECT * FROM ra_action_queue ORDER BY created_at DESC LIMIT ?")
     .bind(limit)

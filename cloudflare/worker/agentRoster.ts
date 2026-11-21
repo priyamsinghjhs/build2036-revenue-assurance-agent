@@ -8,6 +8,11 @@ export type AgentId =
   | "recon_bank"
   | "recon_apm"
   | "recon_fx"
+  | "recon_billing"
+  | "recon_invoicing"
+  | "recon_cash"
+  | "recon_vendor"
+  | "recon_gl"
   | "gap_detection"
   | "investigator"
   | "action"
@@ -54,6 +59,11 @@ export const AGENT_GRAPH_EDGES: { source: AgentId; target: AgentId }[] = [
   { source: "orchestrator", target: "recon_bank" },
   { source: "orchestrator", target: "recon_apm" },
   { source: "orchestrator", target: "recon_fx" },
+  { source: "orchestrator", target: "recon_billing" },
+  { source: "orchestrator", target: "recon_invoicing" },
+  { source: "orchestrator", target: "recon_cash" },
+  { source: "orchestrator", target: "recon_vendor" },
+  { source: "orchestrator", target: "recon_gl" },
   { source: "recon_authorization", target: "gap_detection" },
   { source: "recon_scheme", target: "gap_detection" },
   { source: "recon_network_gateway", target: "gap_detection" },
@@ -62,6 +72,11 @@ export const AGENT_GRAPH_EDGES: { source: AgentId; target: AgentId }[] = [
   { source: "recon_bank", target: "gap_detection" },
   { source: "recon_apm", target: "gap_detection" },
   { source: "recon_fx", target: "gap_detection" },
+  { source: "recon_billing", target: "gap_detection" },
+  { source: "recon_invoicing", target: "gap_detection" },
+  { source: "recon_cash", target: "gap_detection" },
+  { source: "recon_vendor", target: "gap_detection" },
+  { source: "recon_gl", target: "gap_detection" },
   { source: "gap_detection", target: "investigator" },
   { source: "investigator", target: "action" },
   { source: "action", target: "auditor" },

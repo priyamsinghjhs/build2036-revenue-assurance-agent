@@ -39,6 +39,70 @@ export const api = {
     }),
   complete: (run_id: string) =>
     request("/api/agents/complete", { method: "POST", body: JSON.stringify({ run_id }) }),
+  systemMap: () => request<SystemMap>("/api/system-map"),
+  executive: () => request<Executive>("/api/executive"),
+  filters: () => request<FilterOptions>("/api/filters"),
+  automationLatest: () => request<{ latest: AutomationLog | null }>("/api/automation/latest"),
+  runAutomation: () =>
+    request<Record<string, unknown>>("/api/automation/run", { method: "POST", body: "{}" }),
+  decideAction: (id: string, status: "approved" | "rejected" | "done", note?: string) =>
+    request("/api/actions/" + encodeURIComponent(id) + "/decision", {
+      method: "POST",
+      body: JSON.stringify({ status, note }),
+    }),
+};
+
+export type FilterOptions = {
+  period: { from: string; to: string; label: string };
+  merchants: { merchant_id: string; name: string }[];
+  schemes: string[];
+};
+
+export type AutomationLog = {
+  log_id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  detail: unknown;
+};
+
+export type Executive = {
+  synthetic: boolean;
+  period: { from: string; to: string; as_of: string; label: string };
+  kpis: {
+    revenue: number;
+    leakage: number;
+    leakage_pct: number;
+    recovered: number;
+    recoverable: number;
+    written_off: number;
+    match_rate: number;
+    exception_count: number;
+    auth_count: number;
+    merchant_count: number;
+  };
+  ageing: { bucket: string; n: number; leakage: number }[];
+  waterfall: { name: string; value: number; kind: "total" | "leak" | "net" }[];
+  trend: { day: string; leakage: number; n: number }[];
+  period_compare: { prior: number; current: number; delta: number };
+  top_drivers: { area: string; category: string; n: number; leakage: number }[];
+  heatmap: { area: string; label: string; match_rate: number; leakage: number; exceptions: number }[];
+  funnel: { stage: string; amount: number; n: number }[];
+  narrative: { bullets: string[]; source: string; generated_at: string | null } | null;
+};
+
+export type SystemMap = {
+  synthetic: boolean;
+  nodes: { id: string; label: string; lane: string; href: string; x: number; y: number }[];
+  edges: {
+    source: string;
+    target: string;
+    href: string;
+    leakage: number;
+    match_rate: number;
+    exceptions: number;
+    label: string;
+  }[];
 };
 
 export type AreaMeta = { id: string; label: string; group: string; blurb: string };
@@ -127,4 +191,6 @@ export type ActionRow = {
   rationale: string | null;
   status: string;
   created_at: string;
+  decided_at?: string | null;
+  decision_note?: string | null;
 };

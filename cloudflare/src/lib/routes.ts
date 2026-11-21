@@ -1,0 +1,46 @@
+export function areaPath(area: string): string {
+  const map: Record<string, string> = {
+    authorization: "/authorization",
+    scheme: "/scheme",
+    bank_trs: "/bank",
+    gateway: "/fees",
+    network: "/fees",
+    partner: "/fees",
+    terminal: "/terminals",
+    apm: "/apm",
+    fx: "/fx",
+    pricing: "/pricing",
+    payouts: "/payouts",
+    chargebacks: "/chargebacks",
+    billing: "/billing",
+    invoicing: "/invoicing",
+    cash_ar: "/cash",
+    vendor: "/vendors",
+    gl: "/gl",
+    hops: "/hops",
+  };
+  return map[area] ?? "/";
+}
+
+export const TITLES: Record<string, string> = {
+  "/": "Executive summary",
+  "/lifecycle": "Payment lifecycle",
+  "/authorization": "Authorization & capture",
+  "/scheme": "Scheme settlement",
+  "/bank": "Bank / TRS",
+  "/fees": "Fees",
+  "/terminals": "POS terminals",
+  "/apm": "Alternative payments",
+  "/fx": "FX",
+  "/pricing": "Pricing",
+  "/payouts": "Payouts",
+  "/chargebacks": "Chargebacks",
+  "/billing": "Billing / rating",
+  "/invoicing": "Invoicing",
+  "/cash": "Cash & AR",
+  "/vendors": "Vendor costs",
+  "/gl": "GL / ERP",
+  "/hops": "System hops",
+  "/agents": "Agents & actions",
+  "/investigate": "Investigate",
+};

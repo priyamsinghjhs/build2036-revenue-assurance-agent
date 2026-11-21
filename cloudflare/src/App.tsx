@@ -1,4 +1,4 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import {
   Banknote,
   Bot,
@@ -12,74 +12,218 @@ import {
   TerminalSquare,
   Wallet,
   ArrowLeftRight,
+  Workflow,
+  FileSpreadsheet,
+  Receipt,
+  Coins,
+  BookOpen,
+  Waypoints,
+  Menu,
+  X,
 } from "lucide-react";
-import Overview from "./pages/Overview";
-import AreaPage from "./pages/AreaPage";
-import AgentsPage from "./pages/AgentsPage";
-import InvestigatePage from "./pages/InvestigatePage";
+import { useMemo, useState } from "react";
+import ExecutivePage from "@/pages/ExecutivePage";
+import AreaPage from "@/pages/AreaPage";
+import AgentsPage from "@/pages/AgentsPage";
+import InvestigatePage from "@/pages/InvestigatePage";
+import SystemMapPage from "@/pages/SystemMapPage";
+import { FilterProvider, useFilters } from "@/filters";
+import { Select } from "@/components/ui/select";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { TITLES } from "@/lib/routes";
+import { cn } from "@/lib/utils";
 
-const NAV = [
-  { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
-  { to: "/authorization", label: "Authorization", icon: CreditCard },
-  { to: "/scheme", label: "Scheme", icon: Landmark },
-  { to: "/bank", label: "Bank / TRS", icon: Banknote },
-  { to: "/fees", label: "Fees", icon: Percent },
-  { to: "/terminals", label: "POS terminals", icon: TerminalSquare },
-  { to: "/apm", label: "APM", icon: Smartphone },
-  { to: "/fx", label: "FX", icon: ArrowLeftRight },
-  { to: "/pricing", label: "Pricing", icon: Percent },
-  { to: "/payouts", label: "Payouts", icon: Wallet },
-  { to: "/chargebacks", label: "Chargebacks", icon: Store },
-  { to: "/agents", label: "Agents", icon: Bot },
-  { to: "/investigate", label: "Investigate", icon: Search },
+const GROUPS = [
+  {
+    label: "Executive",
+    items: [
+      { to: "/", label: "Executive summary", icon: LayoutDashboard, end: true },
+      { to: "/lifecycle", label: "System map", icon: Waypoints },
+    ],
+  },
+  {
+    label: "Lifecycle",
+    items: [
+      { to: "/authorization", label: "Authorization", icon: CreditCard },
+      { to: "/scheme", label: "Scheme", icon: Landmark },
+      { to: "/bank", label: "Bank / TRS", icon: Banknote },
+      { to: "/fees", label: "Fees", icon: Percent },
+      { to: "/terminals", label: "POS terminals", icon: TerminalSquare },
+      { to: "/apm", label: "APM", icon: Smartphone },
+      { to: "/fx", label: "FX", icon: ArrowLeftRight },
+      { to: "/pricing", label: "Pricing", icon: Percent },
+      { to: "/payouts", label: "Payouts", icon: Wallet },
+      { to: "/chargebacks", label: "Chargebacks", icon: Store },
+      { to: "/hops", label: "Hops", icon: Waypoints },
+    ],
+  },
+  {
+    label: "Reconciliation",
+    items: [
+      { to: "/billing", label: "Billing", icon: FileSpreadsheet },
+      { to: "/invoicing", label: "Invoicing", icon: Receipt },
+      { to: "/cash", label: "Cash & AR", icon: Coins },
+      { to: "/vendors", label: "Vendor costs", icon: BookOpen },
+      { to: "/gl", label: "GL / ERP", icon: Workflow },
+    ],
+  },
+  {
+    label: "Agents & actions",
+    items: [
+      { to: "/agents", label: "Agents & queue", icon: Bot },
+      { to: "/investigate", label: "Investigate", icon: Search },
+    ],
+  },
 ];
 
-export default function App() {
+function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="px-5 py-5">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-200">Acquiring RA</div>
+        <div className="mt-1 text-sm font-semibold text-white">Revenue assurance</div>
+      </div>
+      <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 pb-6" aria-label="Primary">
+        {GROUPS.map((g) => (
+          <div key={g.label}>
+            <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{g.label}</div>
+            <div className="space-y-0.5">
+              {g.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  onClick={onNavigate}
+                  className={({ isActive }) =>
+                    cn(
+                      "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
+                      isActive ? "bg-white/15 text-white" : "text-slate-300 hover:bg-white/10 hover:text-white",
+                    )
+                  }
+                >
+                  <item.icon className="h-4 w-4 shrink-0" aria-hidden />
+                  {item.label}
+                </NavLink>
+              ))}
+            </div>
+          </div>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+function Breadcrumb() {
+  const { pathname } = useLocation();
+  const parts = useMemo(() => {
+    if (pathname.startsWith("/investigate/")) {
+      return [
+        { to: "/", label: "Executive" },
+        { to: "/investigate", label: "Investigate" },
+        { to: pathname, label: "Exception" },
+      ];
+    }
+    const title = TITLES[pathname] ?? pathname.replace("/", "") ?? "Page";
+    if (pathname === "/") return [{ to: "/", label: title }];
+    return [
+      { to: "/", label: "Executive" },
+      { to: pathname, label: title },
+    ];
+  }, [pathname]);
+  return (
+    <nav aria-label="Breadcrumb" className="text-xs text-muted">
+      <ol className="flex flex-wrap items-center gap-1">
+        {parts.map((p, i) => (
+          <li key={p.to} className="flex items-center gap-1">
+            {i > 0 && <span aria-hidden>/</span>}
+            {i === parts.length - 1 ? (
+              <span className="font-medium text-ink">{p.label}</span>
+            ) : (
+              <a href={p.to} className="hover:text-ink">{p.label}</a>
+            )}
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
+function FilterBar() {
+  const { filters, setFilters, options } = useFilters();
+  const merchants = [
+    { value: "all", label: "All merchants" },
+    ...(options?.merchants ?? []).map((m) => ({ value: m.merchant_id, label: `${m.merchant_id} · ${m.name}` })),
+  ];
+  const schemes = [
+    { value: "all", label: "All schemes" },
+    ...(options?.schemes ?? []).map((s) => ({ value: s, label: s })),
+  ];
+  return (
+    <div className="grid gap-3 sm:grid-cols-3">
+      <Select
+        id="filter-period"
+        label="Period"
+        value={filters.period}
+        onValueChange={(v) => setFilters({ period: v })}
+        options={[{ value: "2026-10", label: options?.period.label ?? "October 2026" }]}
+      />
+      <Select
+        id="filter-merchant"
+        label="Merchant"
+        value={filters.merchant}
+        onValueChange={(v) => setFilters({ merchant: v })}
+        options={merchants}
+      />
+      <Select
+        id="filter-scheme"
+        label="Scheme"
+        value={filters.scheme}
+        onValueChange={(v) => setFilters({ scheme: v })}
+        options={schemes}
+      />
+    </div>
+  );
+}
+
+function Shell() {
+  const [open, setOpen] = useState(false);
   return (
     <div className="flex min-h-screen">
-      <aside className="hidden w-56 shrink-0 border-r border-white/10 bg-[#0a101c] p-4 md:block">
-        <div className="mb-6 px-2">
-          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-400">Acquiring RA</div>
-          <div className="mt-1 text-sm text-slate-400">Lifecycle recon</div>
-        </div>
-        <nav className="space-y-1">
-          {NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                `flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${
-                  isActive ? "bg-cyan-500/15 text-cyan-200" : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-                }`
-              }
-            >
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
+      <aside className="hidden w-60 shrink-0 bg-navy-900 text-white md:block print:hidden">
+        <Sidebar />
       </aside>
-      <div className="min-w-0 flex-1">
-        <div className="flex gap-2 overflow-x-auto border-b border-white/10 px-3 py-2 md:hidden">
-          {NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                `whitespace-nowrap rounded-full px-3 py-1 text-xs ${
-                  isActive ? "bg-cyan-500/20 text-cyan-200" : "bg-white/5 text-slate-400"
-                }`
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
+      {open && (
+        <div className="fixed inset-0 z-40 md:hidden print:hidden">
+          <button type="button" className="absolute inset-0 bg-navy-950/40" aria-label="Close menu" onClick={() => setOpen(false)} />
+          <aside className="relative z-50 h-full w-64 bg-navy-900 text-white shadow-xl">
+            <button type="button" className="absolute right-3 top-3 rounded-md p-1 text-slate-300" aria-label="Close" onClick={() => setOpen(false)}>
+              <X className="h-4 w-4" />
+            </button>
+            <Sidebar onNavigate={() => setOpen(false)} />
+          </aside>
         </div>
-        <main className="mx-auto max-w-6xl p-4 md:p-8">
+      )}
+      <div className="min-w-0 flex-1">
+        <header className="topbar no-print border-b border-line bg-white">
+          <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 md:px-8">
+            <button type="button" className="rounded-md p-1 text-ink md:hidden" aria-label="Open menu" onClick={() => setOpen(true)}>
+              <Menu className="h-5 w-5" />
+            </button>
+            <div className="min-w-0 flex-1">
+              <Breadcrumb />
+            </div>
+            <span className="hidden rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-warning sm:inline">
+              Synthetic book
+            </span>
+          </div>
+          <div className="mx-auto max-w-6xl border-t border-line px-4 py-3 md:px-8">
+            <FilterBar />
+          </div>
+        </header>
+        <main id="main" className="mx-auto max-w-6xl p-4 md:p-8">
           <Routes>
-            <Route path="/" element={<Overview />} />
+            <Route path="/" element={<ExecutivePage />} />
+            <Route path="/lifecycle" element={<SystemMapPage />} />
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/investigate" element={<InvestigatePage />} />
             <Route path="/investigate/:exceptionId" element={<InvestigatePage />} />
@@ -88,5 +232,15 @@ export default function App() {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <TooltipProvider>
+      <FilterProvider>
+        <Shell />
+      </FilterProvider>
+    </TooltipProvider>
   );
 }
