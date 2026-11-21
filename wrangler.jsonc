@@ -18,7 +18,6 @@
     {
       "class_name": "RevenueAssuranceContainer",
       "scheduling_policy": "durable_object",
-      "max_instances": 2,
       "images": {
         "base": {
           "dockerfile": "./Dockerfile"
