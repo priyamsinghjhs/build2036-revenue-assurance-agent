@@ -51,6 +51,23 @@ Host the Streamlit app on Render's free web service and call Cloudflare Workers 
 
 The free instance sleeps after 15 minutes of inactivity, so the first visit after a break can take about a minute. Render's ephemeral disk does not persist the DuckDB file; the app rebuilds the synthetic database on startup.
 
+
+## Deploy on Cloudflare Containers
+
+The same Streamlit app can run as a [Cloudflare Container](https://developers.cloudflare.com/containers/) behind a Worker, at `https://revenue-assurance-agent.kalyanachakram.workers.dev`.
+
+The Worker uses the current Durable Object Container API (the `@cloudflare/containers` package is deprecated). HTTP and WebSocket traffic is forwarded to a single named container instance so Streamlit sessions stick. The container uses instance type `standard-1`, sleeps after 15 minutes of inactivity, and needs outbound Internet for Workers AI.
+
+```bash
+npm install
+# One-time: authenticate Wrangler, then set the Workers AI token as a Worker secret
+npx wrangler login
+npx wrangler secret put CF_AI_API_TOKEN
+npx wrangler deploy
+```
+
+Containers require the Workers Paid plan. `CF_ACCOUNT_ID`, `LLM_PROVIDER`, and `CLOUDFLARE_MODEL` are plain Worker vars in `wrangler.jsonc` and are passed into the container at start.
+
 ## Architecture
 
 ```
@@ -81,6 +98,9 @@ Streamlit UI → LangGraph Multi-Agent Flow
 
 ```
 ├── app.py                      # Streamlit demo
+├── Dockerfile                  # Container image for Cloudflare / local
+├── wrangler.jsonc              # Cloudflare Containers + Worker config
+├── worker/index.ts             # Routes HTTP/WebSocket to one container
 ├── render.yaml                 # Render Blueprint (free web service)
 ├── src/
 │   ├── agents/                 # All 5 agents
