@@ -31,6 +31,8 @@ import { getDb } from "./pg";
 import { cachedJson, invalidateMem } from "./cache";
 import { executiveSummary, listFilterOptions } from "./executive";
 import { latestAutomation, runDailyAutomation, setActionStatus } from "./automation";
+import { traceJourney } from "./trace";
+import { networkExportCsv, networkRisk } from "./network";
 import { publicErrorMessage } from "../shared/errors";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -254,6 +256,67 @@ app.post("/api/legacy/agents/audit", async (c) => {
       audit_trail: optionalTrail(body),
     }),
   );
+});
+
+app.get("/api/controls", async (c) => {
+  return cachedJson(
+    "controls",
+    async () => {
+      const db = getDb(c.env);
+      const { results: rows } = await db
+        .prepare(
+          `SELECT c.control_id, c.name, c.objective, c.domain, c.owner, c.frequency, c.threshold,
+                  s.last_run, s.status, s.exception_count, s.leakage, s.trend, s.coverage
+           FROM ra_controls c
+           LEFT JOIN ra_control_status s ON s.control_id = c.control_id
+           ORDER BY CASE WHEN s.status = 'fail' THEN 0 ELSE 1 END, s.leakage DESC NULLS LAST, c.domain, c.name`,
+        )
+        .all<Record<string, unknown>>();
+      const { results: byDomain } = await db
+        .prepare(
+          `SELECT c.domain,
+                  COUNT(*)::int AS n,
+                  COUNT(*) FILTER (WHERE s.status = 'pass')::int AS passing,
+                  COUNT(*) FILTER (WHERE s.status = 'fail')::int AS failing,
+                  COALESCE(SUM(s.leakage),0) AS leakage
+           FROM ra_controls c
+           LEFT JOIN ra_control_status s ON s.control_id = c.control_id
+           GROUP BY c.domain
+           ORDER BY c.domain`,
+        )
+        .all<Record<string, unknown>>();
+      const gov = await db.prepare("SELECT * FROM ra_governance_kpi WHERE id = 1").first<Record<string, unknown>>();
+      return { synthetic: true, controls: rows ?? [], by_domain: byDomain ?? [], kpis: gov };
+    },
+    120_000,
+    (p) => c.executionCtx.waitUntil(p),
+  );
+});
+
+app.get("/api/trace", async (c) => {
+  const q = (c.req.query("q") ?? "").trim();
+  if (!q) return c.json({ query: "", resolved: null, steps: [] });
+  return c.json(await traceJourney(getDb(c.env), q));
+});
+
+app.get("/api/network-risk", async (c) => {
+  return cachedJson(
+    "network-risk",
+    async () => networkRisk(getDb(c.env)),
+    120_000,
+    (p) => c.executionCtx.waitUntil(p),
+  );
+});
+
+app.get("/api/network-risk/export", async (c) => {
+  const kind = c.req.query("kind") === "edges" ? "edges" : "nodes";
+  const csv = await networkExportCsv(getDb(c.env), kind);
+  return new Response(csv, {
+    headers: {
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="network-risk-${kind}.csv"`,
+    },
+  });
 });
 
 app.onError((err, c) => {

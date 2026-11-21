@@ -94,6 +94,67 @@ export default function ExecutivePage() {
         />
       </div>
 
+      {data.governance && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Governance and risk rollup</CardTitle>
+            <CardDescription>
+              Control library health, unapproved config impact and tax leakage count in the book leakage figure.
+              KYC, AML and network-risk amounts are exposure, not booked leakage.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard
+                label="Controls passing"
+                value={`${data.governance.controls_pass}/${data.governance.controls_total}`}
+                hint={`${pct(data.governance.coverage_pct)} coverage · ${data.governance.controls_fail} failing`}
+                tone={data.governance.controls_fail ? "warn" : "ok"}
+              />
+              <KpiCard
+                label="Unapproved config impact"
+                value={inr(data.governance.unapproved_impact, true)}
+                hint={`${data.governance.unapproved_changes} unapproved changes`}
+                tone="leak"
+              />
+              <KpiCard
+                label="Tax & regulatory leakage"
+                value={inr(data.governance.tax_leakage, true)}
+                hint="GST 18%, illustrative TDS / zero-MDR"
+                tone="leak"
+              />
+              <KpiCard
+                label="Payment success rate"
+                value={pct(data.governance.success_rate)}
+                hint={`Interface drop ${pct(data.governance.interface_drop_pct)}`}
+                tone="ok"
+              />
+              <KpiCard
+                label="KYC at-risk volume"
+                value={inr(data.governance.kyc_at_risk, true)}
+                hint={`${data.governance.kyc_open} open KYC exceptions · exposure`}
+                tone="warn"
+              />
+              <KpiCard
+                label="AML exposure"
+                value={inr(data.governance.aml_exposure, true)}
+                hint={`${data.governance.aml_flags} rule-based flags · not book leakage`}
+                tone="warn"
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              <Link to="/controls" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Control library</Link>
+              <Link to="/config" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Config changes</Link>
+              <Link to="/tax" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Tax &amp; regulatory</Link>
+              <Link to="/kyc" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">KYC</Link>
+              <Link to="/aml" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">AML</Link>
+              <Link to="/network-risk" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Network risk</Link>
+              <Link to="/success" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Success rate</Link>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Leadership brief</CardTitle>

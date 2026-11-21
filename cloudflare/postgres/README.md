@@ -36,6 +36,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f postgres/001_schema_and_seed.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f postgres/002_summaries.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f postgres/003_exec_automation.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f postgres/004_settlement_funding_acquirer.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f postgres/005_governance_risk.sql
 
 # Then set the Worker secret (do not commit it) and deploy:
 # npx wrangler secret put DATABASE_URL
@@ -47,4 +48,8 @@ SQLite migrations. `002_summaries.sql` defines the rollup tables and
 `refresh_ra_summaries()`. `004_settlement_funding_acquirer.sql` adds the Settlement,
 Funding and Acquirer domains (batches, funding instructions, acquirer entities)
 and replaces `refresh_ra_summaries()` so those areas roll into the dashboard
-summaries, heatmap and system map.
+summaries, heatmap and system map. `005_governance_risk.sql` adds the control
+library, config-change audit, tax/KYC/AML/interface/network-risk/success-rate
+checks, and again replaces `refresh_ra_summaries()` (health and process controls
+included). Book leakage includes unapproved config impact and tax leakage, and
+excludes KYC, AML, network-risk, success-rate and interface-drop exposure.

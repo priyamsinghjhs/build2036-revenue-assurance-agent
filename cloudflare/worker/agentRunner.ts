@@ -95,6 +95,13 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
       recon_settlement: ["settlement"],
       recon_funding: ["funding"],
       recon_acquirer: ["acquirer"],
+      recon_config: ["config"],
+      recon_tax: ["tax"],
+      recon_kyc: ["kyc"],
+      recon_interfaces: ["interfaces"],
+      recon_aml: ["aml"],
+      recon_network: ["network_risk"],
+      recon_success: ["success"],
     };
     const areas = map[agentId] ?? (domain ? [domain as AreaId] : []);
     const summaries = [];
@@ -143,6 +150,13 @@ export function systemPrompt(agentId: AgentId): string {
     recon_settlement: reconSchema("settlement"),
     recon_funding: reconSchema("funding"),
     recon_acquirer: reconSchema("acquirer"),
+    recon_config: reconSchema("config"),
+    recon_tax: reconSchema("tax"),
+    recon_kyc: reconSchema("kyc"),
+    recon_interfaces: reconSchema("interfaces"),
+    recon_aml: reconSchema("aml"),
+    recon_network: reconSchema("network_risk"),
+    recon_success: reconSchema("success"),
     gap_detection: `{"severity":"critical|high|medium|low","themes":["short theme"],"priority_gaps":[{"exception_id":"","issue":"","amount":0,"priority":"high|medium|low"}],"narrative":"one sentence"}`,
     investigator: `{"root_cause":"short","evidence":["chip"],"affected":"who/what","confidence":80}` /* confidence is an integer 0-100 */,
     action: `{"actions":[{"type":"dispute|recover|rebill|escalate|adjust|mark_known","target":"ref or merchant","amount":0,"currency":"INR","confidence":80,"rationale":"short"}]}`,

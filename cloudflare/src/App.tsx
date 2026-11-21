@@ -23,6 +23,15 @@ import {
   Send,
   Menu,
   X,
+  Shield,
+  ShieldAlert,
+  Scale,
+  IdCard,
+  Radio,
+  ScanSearch,
+  Share2,
+  BadgePercent,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import ExecutivePage from "@/pages/ExecutivePage";
@@ -30,6 +39,9 @@ import AreaPage from "@/pages/AreaPage";
 import AgentsPage from "@/pages/AgentsPage";
 import InvestigatePage from "@/pages/InvestigatePage";
 import SystemMapPage from "@/pages/SystemMapPage";
+import ControlsPage from "@/pages/ControlsPage";
+import TracePage from "@/pages/TracePage";
+import NetworkRiskPage from "@/pages/NetworkRiskPage";
 import { FilterProvider, useFilters } from "@/filters";
 import { Select } from "@/components/ui/select";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -61,6 +73,24 @@ const GROUPS = [
       { to: "/payouts", label: "Payouts", icon: Wallet },
       { to: "/chargebacks", label: "Chargebacks", icon: Store },
       { to: "/hops", label: "Hops", icon: Waypoints },
+      { to: "/interfaces", label: "Interface drops", icon: Radio },
+      { to: "/success", label: "Success rate", icon: BadgePercent },
+    ],
+  },
+  {
+    label: "Governance",
+    items: [
+      { to: "/controls", label: "Control library", icon: Shield },
+      { to: "/config", label: "Config & rules", icon: SlidersHorizontal },
+      { to: "/kyc", label: "KYC & profile", icon: IdCard },
+    ],
+  },
+  {
+    label: "Risk",
+    items: [
+      { to: "/tax", label: "Tax & regulatory", icon: Scale },
+      { to: "/aml", label: "AML / fraud", icon: ShieldAlert },
+      { to: "/network-risk", label: "Network risk", icon: Share2 },
     ],
   },
   {
@@ -78,6 +108,7 @@ const GROUPS = [
     items: [
       { to: "/agents", label: "Agents & queue", icon: Bot },
       { to: "/investigate", label: "Investigate", icon: Search },
+      { to: "/trace", label: "Transaction trace", icon: ScanSearch },
     ],
   },
 ];
@@ -233,6 +264,9 @@ function Shell() {
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/investigate" element={<InvestigatePage />} />
             <Route path="/investigate/:exceptionId" element={<InvestigatePage />} />
+            <Route path="/controls" element={<ControlsPage />} />
+            <Route path="/trace" element={<TracePage />} />
+            <Route path="/network-risk" element={<NetworkRiskPage />} />
             <Route path="/:slug" element={<AreaPage />} />
           </Routes>
         </main>

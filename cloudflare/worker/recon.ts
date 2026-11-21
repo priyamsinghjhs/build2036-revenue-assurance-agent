@@ -20,7 +20,14 @@ export type AreaId =
   | "hops"
   | "settlement"
   | "funding"
-  | "acquirer";
+  | "acquirer"
+  | "config"
+  | "tax"
+  | "kyc"
+  | "interfaces"
+  | "aml"
+  | "network_risk"
+  | "success";
 
 export const AREA_META: Record<
   AreaId,
@@ -47,6 +54,13 @@ export const AREA_META: Record<
   settlement: { label: "Merchant Settlement", group: "lifecycle", blurb: "Batch cut-off, fee deductions, gross-to-net, captures vs inclusion" },
   funding: { label: "Merchant Funding", group: "lifecycle", blurb: "NEFT/RTGS/IMPS transfers, SLA, wrong account, held or returned funds" },
   acquirer: { label: "Acquirer / Sponsor", group: "lifecycle", blurb: "Sponsor-bank volumes, fee pass-through, invoices vs contract, statement recon" },
+  config: { label: "Config & rule changes", group: "governance", blurb: "Pricing, MDR, commission, fee and limit changes with approval and revenue impact" },
+  tax: { label: "Tax & regulatory", group: "risk", blurb: "GST 18% on MDR/fees, TDS on partner commission, illustrative zero-MDR and daily caps" },
+  kyc: { label: "KYC & profile", group: "governance", blurb: "KYC status, risk tier, MCC, limits, aggregator hierarchy and bank accounts" },
+  interfaces: { label: "Interface / message drops", group: "lifecycle", blurb: "Per-hop counts and volumes, drops, duplicates and latency, daily funnel" },
+  aml: { label: "AML / fraud flags", group: "risk", blurb: "Rule-based structuring, refund abuse, round-tripping, velocity spikes, dormant bursts" },
+  network_risk: { label: "Network risk", group: "risk", blurb: "Entity graph: shared accounts and devices, cycles, known-bad proximity, changed accounts" },
+  success: { label: "Payment success rate", group: "lifecycle", blurb: "Approval and failure reasons by channel, acquirer and APM, including EMI" },
 };
 
 export const AREA_IDS = Object.keys(AREA_META) as AreaId[];
@@ -102,6 +116,22 @@ export function severityOf(leakage: number, category: string): "high" | "medium"
     "acquirer_fee_overcharge",
     "acquirer_passthrough_markup",
     "acquirer_statement_unmatched",
+    "config_unapproved",
+    "tax_gst_wrong_rate",
+    "tax_tds_shortfall",
+    "tax_zero_mdr_illustrative",
+    "tax_daily_limit_breach",
+    "kyc_expired_transacting",
+    "kyc_pending_transacting",
+    "kyc_limit_breach",
+    "aml_structuring",
+    "aml_refund_abuse",
+    "aml_round_trip",
+    "aml_velocity_spike",
+    "aml_dormant_burst",
+    "network_known_bad",
+    "network_shared_account",
+    "interface_drop",
   ]);
   if (highCats.has(category) || leakage >= 5000) return "high";
   if (leakage >= 1000) return "medium";

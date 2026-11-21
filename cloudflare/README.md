@@ -45,6 +45,18 @@ All data is **synthetic** (seed=2036, October 2026 book) and labelled `is_synthe
 | `/vendors` | Vendor invoices vs expected cost and payments (including duplicates) |
 | `/gl` | Subledgers vs GL, unposted / misposted journals |
 | `/hops` | Gateway↔switch↔clearing, bank statement↔TRS |
+| `/settlement` | Merchant settlement batches, fees, gross-to-net, missing or duplicate txns |
+| `/funding` | NEFT/RTGS/IMPS funding, SLA, wrong or changed accounts |
+| `/acquirer` | Sponsor-bank volumes, fee pass-through, statement recon |
+| `/controls` | Control library: health heatmap, failing controls, coverage by domain |
+| `/config` | Pricing / MDR / commission / fee / limit change log and unapproved impact |
+| `/tax` | GST 18% on MDR/fees, illustrative TDS and zero-MDR, daily cap breaches |
+| `/kyc` | KYC status, risk tier, MCC, limits, aggregator hierarchy |
+| `/interfaces` | Per-hop message counts and volumes, drops, daily funnel |
+| `/aml` | Rule-based structuring, refund abuse, round-tripping, velocity, dormant bursts |
+| `/network-risk` | Entity graph with Postgres risk scores; CSV export for offline GNN training |
+| `/success` | Approval / failure reasons by channel, acquirer and APM, including EMI |
+| `/trace` | End-to-end journey for a txn, batch or invoice id |
 | `/agents` | Agent roster, React Flow handoff graph, visual outputs, action queue |
 | `/investigate/:id` | On-demand investigator → action → auditor for one exception |
 
@@ -67,6 +79,7 @@ Deterministic SQL views compute matched / unmatched / variance and leakage. The 
 | Investigator / Root-cause | Explains why the top gaps exist |
 | Action / Recommendation | Dispute, recover, re-bill, escalate, adjust — with amounts |
 | Auditor / Compliance | Completeness, policy fit, sign-off |
+| Config / Tax / KYC / Interfaces / AML / Network / Success recon | On-demand domain agents (not in “Run all”, to stay inside the free neuron budget) |
 
 "Run all" is 13 sequential Workers AI calls (stay within 10k neurons/day). "Run pipeline" for one domain is 6 calls. A single-exception investigation is 3 calls (investigator, action, auditor). Re-running a cached scope still calls the LLM; opening dashboards does not.
 

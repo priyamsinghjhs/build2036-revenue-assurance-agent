@@ -44,6 +44,12 @@ const ROUTE_TO_AREA: Record<string, string> = {
   settlement: "settlement",
   funding: "funding",
   acquirer: "acquirer",
+  config: "config",
+  tax: "tax",
+  kyc: "kyc",
+  interfaces: "interfaces",
+  aml: "aml",
+  success: "success",
 };
 
 const FEE_AREAS = ["gateway", "network", "partner"] as const;
@@ -92,7 +98,7 @@ export default function AreaPage() {
       </header>
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <KpiCard label="Leakage" value={inr(leakage, true)} tone="leak" />
+        <KpiCard label={["kyc","aml","interfaces","success"].includes(primary) ? "Exposure" : "Leakage"} value={inr(leakage, true)} tone="leak" />
         <KpiCard label="Match rate" value={pct(total ? matched / total : 1)} tone="ok" />
         <KpiCard label="Exceptions" value={String(isFiltered ? exceptions.length : pages.reduce((s, p) => s + p.summary.exception_count, 0))} hint={isFiltered ? "Filtered list" : undefined} />
       </div>
@@ -159,7 +165,7 @@ function AreaChartBlock({ series }: { series: { type: string; points: Record<str
   const raw = series.points ?? [];
   if (!raw.length) return <p className="text-sm text-slate-500">No series</p>;
   const type = series.type;
-  if (type === "settlement" || type === "funding" || type === "acquirer") {
+  if (["settlement","funding","acquirer","config","tax","kyc","interfaces","aml","success"].includes(type)) {
     return <DomainCharts type={type} points={raw} />;
   }
   const cssPoints =

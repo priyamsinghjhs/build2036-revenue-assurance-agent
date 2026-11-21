@@ -32,6 +32,13 @@ const DOMAINS = [
   { id: "settlement", label: "Settlement" },
   { id: "funding", label: "Funding" },
   { id: "acquirer", label: "Acquirer" },
+  { id: "config", label: "Config changes" },
+  { id: "tax", label: "Tax & regulatory" },
+  { id: "kyc", label: "KYC" },
+  { id: "interfaces", label: "Interfaces" },
+  { id: "aml", label: "AML / fraud" },
+  { id: "network_risk", label: "Network risk" },
+  { id: "success", label: "Success rate" },
 ];
 
 type StepStatus = "idle" | "running" | "done" | "cached" | "error";
