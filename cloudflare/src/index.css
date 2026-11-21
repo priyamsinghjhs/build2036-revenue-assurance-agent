@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #ffffff;
+  color: #31333f;
+  font-family: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+}
+
+.markdown-body p {
+  margin: 0.35rem 0 0.7rem;
+  line-height: 1.55;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  font-weight: 650;
+  margin: 0.8rem 0 0.35rem;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.25rem 0 0.7rem 1.2rem;
+  padding: 0;
+}
+
+.markdown-body li {
+  margin: 0.15rem 0;
+}
+
+.markdown-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  background: #f0f2f6;
+  padding: 0.05rem 0.25rem;
+  border-radius: 0.2rem;
+}

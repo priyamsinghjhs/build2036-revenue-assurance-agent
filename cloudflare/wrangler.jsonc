@@ -1,0 +1,25 @@
+{
+  "name": "build2036-revenue-assurance-agent",
+  "account_id": "95f96d50618b771a8c58542029828a1a",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-11-21",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "revenue-assurance",
+      "database_id": "59a55857-99d4-4c74-82ab-326b2f5f99c3",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

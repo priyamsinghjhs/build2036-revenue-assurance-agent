@@ -77,6 +77,17 @@ Streamlit UI → LangGraph Multi-Agent Flow
                 └─ Keyword retrieval over fee-policy documents
 ```
 
+
+## Cloudflare-native (Workers Free)
+
+The app also runs entirely on the Cloudflare free plan as a React + Vite + Tailwind SPA served from a TypeScript Worker (D1 + Workers AI). This replaces the workers.dev proxy and does not use Containers or Pages.
+
+See [`cloudflare/README.md`](cloudflare/README.md) for deploy steps (`cd cloudflare && npm install && npx wrangler d1 migrations apply revenue-assurance --remote && npm run deploy`).
+
+Live URL: https://build2036-revenue-assurance-agent.kalyanachakram.workers.dev
+
+The five-agent investigation is unchanged in prompts and outputs; the LangGraph flow is sequential TypeScript steps invoked one agent per API request so the Worker stays inside free-plan limits. The synthetic DuckDB dataset is seeded into D1 from the same literals as `src/data/init_db.py`.
+
 ## Why This Fits BUILD 2036
 
 - **Vertical AI Copilot** for Treasury/Finance revenue assurance
@@ -108,6 +119,7 @@ Streamlit UI → LangGraph Multi-Agent Flow
 │   ├── graph.py                # LangGraph orchestration
 │   └── data/init_db.py         # Synthetic data generator
 ├── requirements.txt
+├── cloudflare/                 # Free-plan Worker + React SPA + D1
 └── README.md
 ```
 
