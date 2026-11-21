@@ -1,9 +1,50 @@
 """All five agents for the Revenue Assurance Copilot."""
-from langchain_ollama import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+import os
 
-llm = ChatOllama(model="llama3.1:8b", temperature=0.1)
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
+DEFAULT_CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
+DEFAULT_TEMPERATURE = 0.1
+
+
+def get_llm(provider: str | None = None):
+    """Return a chat model selected by LLM_PROVIDER (or an explicit provider).
+
+    Providers:
+      - ollama (default): local ChatOllama with llama3.1:8b
+      - cloudflare: ChatCloudflareWorkersAI on Workers AI
+    """
+    selected = (provider or os.getenv("LLM_PROVIDER", "ollama")).strip().lower()
+    temperature = DEFAULT_TEMPERATURE
+
+    if selected == "ollama":
+        from langchain_ollama import ChatOllama
+
+        return ChatOllama(model=DEFAULT_OLLAMA_MODEL, temperature=temperature)
+
+    if selected == "cloudflare":
+        from langchain_cloudflare.chat_models import ChatCloudflareWorkersAI
+
+        kwargs = {
+            "model": os.getenv("CLOUDFLARE_MODEL", DEFAULT_CLOUDFLARE_MODEL),
+            "temperature": temperature,
+        }
+        account_id = os.getenv("CF_ACCOUNT_ID")
+        api_token = os.getenv("CF_AI_API_TOKEN")
+        if account_id:
+            kwargs["account_id"] = account_id
+        if api_token:
+            kwargs["api_token"] = api_token
+        return ChatCloudflareWorkersAI(**kwargs)
+
+    raise ValueError(
+        f"Unsupported LLM_PROVIDER={selected!r}. Use 'ollama' or 'cloudflare'."
+    )
+
+
+llm = get_llm()
 
 def anomaly_detector(state: dict) -> dict:
     """Detect anomalies in settlement data."""

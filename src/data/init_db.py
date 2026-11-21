@@ -32,17 +32,18 @@ def init_db():
     con.execute("CREATE OR REPLACE TABLE transactions AS SELECT * FROM txns")
 
     # Fee schedule (for RAG)
-    fee_docs = [
+    fee_docs = pd.DataFrame([
         {"id": "fee1", "text": "Standard merchant fee is 2.5% of gross volume. Volume tiers above $10k receive 2.2%."},
         {"id": "fee2", "text": "Settlement must occur within T+2. Delays beyond T+3 trigger investigation."},
         {"id": "fee3", "text": "Fee variance above 1.5 percentage points requires root-cause analysis and possible dispute."},
         {"id": "fee4", "text": "Refunds reduce net settlement. Expected net = gross - refunds - fees."}
-    ]
+    ])
     con.execute("CREATE OR REPLACE TABLE fee_documents AS SELECT * FROM fee_docs")
 
     print(f"Database initialized at {DB_PATH}")
     print(con.execute("SELECT COUNT(*) FROM settlements").fetchone())
     con.close()
+    return DB_PATH
 
 if __name__ == "__main__":
     init_db()
