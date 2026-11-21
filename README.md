@@ -46,7 +46,7 @@ Host the Streamlit app on Render's free web service and call Cloudflare Workers 
    - **Build:** `pip install -r requirements.txt`
    - **Start:** `streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false`
    - **Health check:** `/_stcore/health`
-3. When prompted, set `CF_ACCOUNT_ID` and `CF_AI_API_TOKEN`. `LLM_PROVIDER` is already set to `cloudflare`, and `CLOUDFLARE_MODEL` defaults to `@cf/google/gemma-4-26b-a4b-it` (free-tier, tool-calling).
+3. When prompted, set `CF_ACCOUNT_ID` and `CF_AI_API_TOKEN`. `LLM_PROVIDER` is already set to `cloudflare`, and `CLOUDFLARE_MODEL` defaults to `@cf/meta/llama-4-scout-17b-16e-instruct` (Workers AI text-gen, tool-calling).
 4. After the deploy succeeds, open the `*.onrender.com` URL.
 
 The free instance sleeps after 15 minutes of inactivity, so the first visit after a break can take about a minute. Render's ephemeral disk does not persist the DuckDB file; the app rebuilds the synthetic database on startup.
@@ -71,7 +71,7 @@ Streamlit UI → LangGraph Multi-Agent Flow
 ## Tech Stack (All Open Source)
 
 - **Data**: DuckDB
-- **LLM**: Ollama (Llama 3.1) locally, or Cloudflare Workers AI (Gemma 4) in production
+- **LLM**: Ollama (Llama 3.1) locally, or Cloudflare Workers AI (Llama 4 Scout) in production
 - **Orchestration**: LangGraph
 - **RAG**: Keyword retrieval over fee schedules (upgradeable to a vector store)
 - **UI**: Streamlit
