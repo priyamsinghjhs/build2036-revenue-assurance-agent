@@ -7,6 +7,7 @@ import {
   type Edge,
   type Node,
 } from "@xyflow/react";
+import { flowNodeTypes } from "./FlowLabelNode";
 import { inr } from "../lib/format";
 
 export function MoneyFlow({
@@ -51,16 +52,19 @@ export function MoneyFlow({
     [flow],
   );
   return (
-    <div className="h-[320px] overflow-hidden rounded-2xl border border-white/10 bg-[#0c1220]">
+    <div className="h-[240px] overflow-hidden rounded-xl border border-line bg-white sm:h-[320px] md:h-[360px]">
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        nodeTypes={flowNodeTypes}
         fitView
+        fitViewOptions={{ padding: 0.16 }}
         panOnDrag
         zoomOnScroll={false}
+        nodesConnectable={false}
         proOptions={{ hideAttribution: true }}
       >
-        <Background color="#1e293b" gap={18} />
+        <Background color="#e2e8f0" gap={18} />
         <Controls showInteractive={false} />
       </ReactFlow>
     </div>
@@ -71,17 +75,16 @@ function n(id: string, label: string, value: number, x: number, y: number): Node
   return {
     id,
     position: { x, y },
+    type: "label",
     data: { label: `${label}\n${inr(value, true)}` },
     style: {
-      background: "#152033",
-      color: "#e5eef7",
-      border: "1px solid #334155",
+      background: "#ffffff",
+      color: "#0f172a",
+      border: "1px solid #e2e8f0",
       borderRadius: 12,
-      padding: 8,
-      width: 140,
-      whiteSpace: "pre-line",
-      fontSize: 11,
-      fontWeight: 600,
+      padding: 0,
+      width: 148,
+      minHeight: 44,
     },
   };
 }
@@ -90,17 +93,16 @@ function leakN(id: string, label: string, value: number, x: number, y: number): 
   return {
     id,
     position: { x, y },
+    type: "label",
     data: { label: `${label}\n${inr(value, true)}` },
     style: {
-      background: "#3f1219",
-      color: "#fda4af",
-      border: "1px solid #fb7185",
+      background: "#fef2f2",
+      color: "#b91c1c",
+      border: "1px solid #fecaca",
       borderRadius: 12,
-      padding: 8,
-      width: 150,
-      whiteSpace: "pre-line",
-      fontSize: 11,
-      fontWeight: 600,
+      padding: 0,
+      width: 156,
+      minHeight: 44,
     },
   };
 }
@@ -111,8 +113,8 @@ function e(source: string, target: string, value: number, leak: boolean): Edge {
     source,
     target,
     label: inr(value, true),
-    style: { stroke: leak ? "#fb7185" : "#22d3ee", strokeWidth: leak ? 2 : 2.5 },
-    labelStyle: { fill: leak ? "#fda4af" : "#cbd5e1", fontSize: 10 },
-    markerEnd: { type: MarkerType.ArrowClosed, color: leak ? "#fb7185" : "#22d3ee" },
+    style: { stroke: leak ? "#b91c1c" : "#1d4ed8", strokeWidth: leak ? 2 : 2.5 },
+    labelStyle: { fill: leak ? "#b91c1c" : "#334155", fontSize: 10 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: leak ? "#b91c1c" : "#1d4ed8" },
   };
 }

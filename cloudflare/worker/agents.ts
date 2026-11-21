@@ -1,4 +1,5 @@
 import { getRelatedTransactions, getSettlementData } from "./db";
+import { getDb } from "./pg";
 import { complete } from "./llm";
 import {
   ANOMALY_TEMPLATE,
@@ -12,7 +13,7 @@ import {
 import type { AgentState, Env } from "./types";
 
 export async function runAnomalyDetector(env: Env, settlementId: string): Promise<AgentState> {
-  const settlementData = await getSettlementData(env.DB, settlementId);
+  const settlementData = await getSettlementData(getDb(env), settlementId);
   if (settlementData === null) {
     throw new NotFoundError(`Unknown settlement_id: ${settlementId}`);
   }
@@ -30,7 +31,7 @@ export async function runInvestigator(
   env: Env,
   state: Pick<AgentState, "settlement_id" | "anomaly_result" | "audit_trail">,
 ): Promise<AgentState> {
-  const relatedData = await getRelatedTransactions(env.DB, state.settlement_id);
+  const relatedData = await getRelatedTransactions(getDb(env), state.settlement_id);
   const policy = retrieveFeePolicy("fee variance settlement rules");
   const prompt = fill(INVESTIGATOR_TEMPLATE, {
     anomaly: state.anomaly_result ?? "",

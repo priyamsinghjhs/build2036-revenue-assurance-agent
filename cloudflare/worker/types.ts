@@ -9,7 +9,7 @@ export type AiBinding = {
 
 export type Env = {
   AI: AiBinding;
-  DB: D1Database;
+  DATABASE_URL: string;
   ASSETS: Fetcher;
 };
 

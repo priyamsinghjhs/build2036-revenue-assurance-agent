@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import { AlertTriangle, IndianRupee, ShieldCheck, Store } from "lucide-react";
 import { api, type Overview as OverviewData } from "../api";
+import { chartMargin, TruncTick } from "../components/ChartKit";
 import { KpiCard } from "../components/KpiCard";
 import { MoneyFlow } from "../components/MoneyFlow";
 import { inr, pct, prettyCat } from "../lib/format";
@@ -44,9 +45,17 @@ export default function Overview() {
           <h1 className="text-2xl font-semibold tracking-tight">Revenue assurance</h1>
           <p className="text-sm text-slate-400">Payment lifecycle recon · synthetic October 2026 book</p>
         </div>
-        <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-300 ring-1 ring-amber-500/30">
-          Synthetic data
-        </span>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/lifecycle"
+            className="rounded-full bg-cyan-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-300 ring-1 ring-cyan-500/30 hover:bg-cyan-500/25"
+          >
+            System map
+          </Link>
+          <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-300 ring-1 ring-amber-500/30">
+            Synthetic data
+          </span>
+        </div>
       </header>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -85,12 +94,12 @@ export default function Overview() {
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="rounded-2xl border border-white/10 bg-[#101827] p-4">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">Leakage trend</h2>
-          <div className="h-56">
+          <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data.trend}>
+              <AreaChart data={data.trend} margin={{ ...chartMargin, bottom: 36 }}>
                 <CartesianGrid stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="day" tick={{ fill: "#94a3b8", fontSize: 10 }} tickFormatter={(d) => String(d).slice(5)} />
-                <YAxis tick={{ fill: "#94a3b8", fontSize: 10 }} tickFormatter={(v) => inr(Number(v), true)} />
+                <XAxis dataKey="day" interval={0} height={48} tick={<TruncTick angle={-35} textAnchor="end" maxChars={8} formatter={(d) => String(d ?? "").slice(5)} />} />
+                <YAxis width={56} tick={<TruncTick textAnchor="end" maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
                 <Tooltip
                   contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
                   formatter={(v) => inr(Number(v), true)}
@@ -102,12 +111,12 @@ export default function Overview() {
         </section>
         <section className="rounded-2xl border border-white/10 bg-[#101827] p-4">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">By gap type</h2>
-          <div className="h-56">
+          <div style={{ height: Math.max(288, cat.length * 28) }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={cat} layout="vertical" margin={{ left: 16 }}>
+              <BarChart data={cat} layout="vertical" margin={{ ...chartMargin, left: 8, right: 16 }}>
                 <CartesianGrid stroke="#1e293b" horizontal={false} />
-                <XAxis type="number" tick={{ fill: "#94a3b8", fontSize: 10 }} tickFormatter={(v) => inr(Number(v), true)} />
-                <YAxis type="category" dataKey="name" width={130} tick={{ fill: "#cbd5e1", fontSize: 10 }} />
+                <XAxis type="number" tick={<TruncTick maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
+                <YAxis type="category" dataKey="name" width={100} interval={0} tick={<TruncTick textAnchor="end" maxChars={14} />} />
                 <Tooltip
                   contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
                   formatter={(v) => inr(Number(v), true)}
@@ -130,10 +139,10 @@ export default function Overview() {
             <Link
               key={a.area}
               to={areaPath(a.area)}
-              className="rounded-2xl border border-white/10 bg-[#101827] p-4 transition hover:border-cyan-400/40"
+              className="min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[#101827] p-4 transition hover:border-cyan-400/40"
             >
               <div className="flex items-start justify-between gap-2">
-                <div className="font-medium">{a.label}</div>
+                <div className="min-w-0 truncate pr-2 font-medium" title={a.label}>{a.label}</div>
                 <div className="text-right text-rose-300 tabular-nums">{inr(a.leakage, true)}</div>
               </div>
               <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
@@ -166,6 +175,12 @@ function areaPath(area: string): string {
     pricing: "/pricing",
     payouts: "/payouts",
     chargebacks: "/chargebacks",
+    billing: "/billing",
+    invoicing: "/invoicing",
+    cash_ar: "/cash",
+    vendor: "/vendors",
+    gl: "/gl",
+    hops: "/hops",
   };
   return map[area] || "/";
 }

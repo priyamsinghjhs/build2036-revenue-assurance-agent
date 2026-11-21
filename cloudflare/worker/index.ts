@@ -23,41 +23,103 @@ import {
   moneyFlow,
   summarizeAll,
   summarizeArea,
+  systemMap,
   type AreaId,
 } from "./recon";
 import type { AgentState, Env } from "./types";
+import { getDb } from "./pg";
+import { cachedJson, invalidateMem } from "./cache";
+import { executiveSummary, listFilterOptions } from "./executive";
+import { latestAutomation, runDailyAutomation, setActionStatus } from "./automation";
 
 const app = new Hono<{ Bindings: Env }>();
 
 app.get("/api/health", (c) => c.json({ ok: true, synthetic: true }));
 
+app.get("/api/filters", async (c) => c.json(await listFilterOptions(getDb(c.env))));
+
+app.get("/api/executive", async (c) => {
+  return cachedJson(
+    "executive",
+    async () => executiveSummary(getDb(c.env)),
+    120_000,
+    (p) => c.executionCtx.waitUntil(p),
+  );
+});
+
+app.post("/api/automation/run", async (c) => {
+  const result = await runDailyAutomation(c.env, { force: true });
+  invalidateMem();
+  return c.json(result, result.ok ? 200 : 500);
+});
+
+app.get("/api/automation/latest", async (c) => {
+  try {
+    const latest = await latestAutomation(getDb(c.env));
+    return c.json({ latest });
+  } catch {
+    return c.json({ latest: null });
+  }
+});
+
+app.post("/api/actions/:id/decision", async (c) => {
+  const body = await readJson(c);
+  const status = requiredString(body, "status");
+  if (!["approved", "rejected", "done"].includes(status)) {
+    throw new HTTPException(400, { message: "status must be approved, rejected, or done" });
+  }
+  const ok = await setActionStatus(
+    getDb(c.env),
+    c.req.param("id"),
+    status as "approved" | "rejected" | "done",
+    optionalString(body, "note") || undefined,
+  );
+  if (!ok) throw new HTTPException(404, { message: "Action not found" });
+  invalidateMem();
+  return c.json({ ok: true, action_id: c.req.param("id"), status });
+});
+
+
 app.get("/api/dashboard/overview", async (c) => {
-  const [kpis, areas, byCategory, trend, flow] = await Promise.all([
-    kpiCounts(c.env.DB),
-    summarizeAll(c.env.DB),
-    leakageByCategory(c.env.DB),
-    leakageTrend(c.env.DB),
-    moneyFlow(c.env.DB),
-  ]);
-  const totalLeakage = areas.reduce((s, a) => s + a.leakage, 0);
-  const recov = areas.filter((a) => a.leakage > 0).reduce((s, a) => s + a.leakage, 0);
-  const matched = areas.reduce((s, a) => s + a.matched, 0);
-  const total = areas.reduce((s, a) => s + a.matched + a.unmatched + a.variance, 0);
-  return c.json({
-    synthetic: true,
-    kpis: {
-      total_leakage: Math.round(totalLeakage * 100) / 100,
-      recovery_potential: Math.round(recov * 100) / 100,
-      match_rate: total ? matched / total : 1,
-      exception_count: kpis.exception_count,
-      auth_count: kpis.auth_count,
-      merchant_count: kpis.merchant_count,
+  return cachedJson(
+    "overview",
+    async () => {
+      const db = getDb(c.env);
+      const [kpis, areas, byCategory, trend, flow] = await Promise.all([
+        kpiCounts(db),
+        summarizeAll(db),
+        leakageByCategory(db),
+        leakageTrend(db),
+        moneyFlow(db),
+      ]);
+      return {
+        synthetic: true,
+        kpis: {
+          total_leakage: kpis.total_leakage,
+          recovery_potential: kpis.recovery_potential,
+          match_rate: kpis.match_rate,
+          exception_count: kpis.exception_count,
+          auth_count: kpis.auth_count,
+          merchant_count: kpis.merchant_count,
+        },
+        areas,
+        by_category: byCategory,
+        trend,
+        flow,
+      };
     },
-    areas,
-    by_category: byCategory,
-    trend,
-    flow,
-  });
+    120_000,
+    (p) => c.executionCtx.waitUntil(p),
+  );
+});
+
+app.get("/api/system-map", async (c) => {
+  return cachedJson(
+    "system-map",
+    async () => ({ synthetic: true, ...(await systemMap(getDb(c.env))) }),
+    120_000,
+    (p) => c.executionCtx.waitUntil(p),
+  );
 });
 
 app.get("/api/areas", (c) =>
@@ -69,16 +131,24 @@ app.get("/api/areas", (c) =>
 app.get("/api/areas/:id", async (c) => {
   const id = c.req.param("id") as AreaId;
   if (!AREA_IDS.includes(id)) throw new HTTPException(404, { message: "Unknown area" });
-  const [summary, exceptions, series] = await Promise.all([
-    summarizeArea(c.env.DB, id),
-    listExceptions(c.env.DB, id, 100),
-    areaSeries(c.env.DB, id),
-  ]);
-  return c.json({ synthetic: true, meta: AREA_META[id], summary, series, exceptions });
+  return cachedJson(
+    `area:${id}`,
+    async () => {
+      const db = getDb(c.env);
+      const [summary, exceptions, series] = await Promise.all([
+        summarizeArea(db, id),
+        listExceptions(db, id, 100),
+        areaSeries(db, id),
+      ]);
+      return { synthetic: true, meta: AREA_META[id], summary, series, exceptions };
+    },
+    120_000,
+    (p) => c.executionCtx.waitUntil(p),
+  );
 });
 
 app.get("/api/exceptions/:id", async (c) => {
-  const row = await getException(c.env.DB, c.req.param("id"));
+  const row = await getException(getDb(c.env), c.req.param("id"));
   if (!row) throw new NotFoundError("Exception not found");
   return c.json({ exception: row });
 });
@@ -89,19 +159,19 @@ app.get("/api/agents/roster", (c) =>
 
 app.get("/api/agents/latest", async (c) => {
   const scope = c.req.query("scope") ?? undefined;
-  const latest = await latestRun(c.env.DB, scope);
+  const latest = await latestRun(getDb(c.env), scope);
   return c.json({ latest });
 });
 
 app.get("/api/actions", async (c) => {
-  const actions = await listActions(c.env.DB);
+  const actions = await listActions(getDb(c.env));
   return c.json({ actions });
 });
 
 app.post("/api/agents/runs", async (c) => {
   const body = await readJson(c);
   const scope = optionalString(body, "scope") || "all";
-  const run = await startRun(c.env.DB, scope);
+  const run = await startRun(getDb(c.env), scope);
   const domain = optionalString(body, "domain");
   const sequence = scope === "all" ? RUN_ALL_SEQUENCE : sequenceForDomain(domain || scope);
   return c.json({ ...run, sequence });
@@ -127,14 +197,14 @@ app.post("/api/agents/step", async (c) => {
 app.post("/api/agents/complete", async (c) => {
   const body = await readJson(c);
   const runId = requiredString(body, "run_id");
-  await completeRun(c.env.DB, runId);
+  await completeRun(getDb(c.env), runId);
   return c.json({ ok: true, run_id: runId, status: "completed" });
 });
 
 // Legacy settlement + 5-agent endpoints (still used if a settlement is investigated)
 app.get("/api/settlements", async (c) => {
   try {
-    const settlements = await listSettlements(c.env.DB);
+    const settlements = await listSettlements(getDb(c.env));
     return c.json({ settlements });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -225,4 +295,12 @@ function optionalTrail(body: Record<string, unknown>): string[] {
 }
 
 export type { AgentState, Env };
-export default app;
+async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  ctx.waitUntil(runDailyAutomation(env, { force: false }).then(() => invalidateMem()));
+}
+
+export default {
+  fetch: app.fetch,
+  scheduled,
+};
+

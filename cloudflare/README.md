@@ -1,3 +1,11 @@
+# Revenue Assurance (Cloudflare + Neon)
+
+Public Workers Free app with a React frontend and a Hono Worker. Runtime data is **Neon Postgres** (free tier) over `@neondatabase/serverless`. Dashboards read pre-aggregated summary tables and are cached for 120s. A daily Cron Trigger (02:15 UTC / 07:45 Asia/Calcutta) drafts the leadership brief, investigates the top exception within the Workers AI neuron budget, and seeds the Action Queue.
+
+The landing page is an **Executive summary** for leadership (KPIs, waterfall, trend, top drivers, heatmap, recovery funnel, printable brief). Domain pages share one template. Palette: navy / slate, one blue accent, semantic red/amber/green for status only. Inter, 8px spacing, shadcn/Radix components.
+
+See `postgres/README.md` for apply steps. Do not bind D1. Hyperdrive is not used.
+
 # Cloudflare-native Revenue Assurance
 
 Graphical payment-acquiring revenue assurance app on the **Workers Free** plan.
@@ -25,7 +33,14 @@ All data is **synthetic** (seed=2036, October 2026 book) and labelled `is_synthe
 | `/pricing` | MDR billed vs contracted bps |
 | `/payouts` | Payout vs net settlement, overdue reserves |
 | `/chargebacks` | Unrecovered chargebacks, double-counted refunds |
-| `/agents` | 13-agent roster, React Flow handoff graph, visual outputs, action queue |
+| `/lifecycle` | End-to-end system map of every hop, leakage on edges, click-through |
+| `/billing` | Contract vs billing rating, unbilled usage |
+| `/invoicing` | Billing vs invoices, credit notes, GST |
+| `/cash` | Cash application, short-pays, unapplied cash, AR ageing |
+| `/vendors` | Vendor invoices vs expected cost and payments (including duplicates) |
+| `/gl` | Subledgers vs GL, unposted / misposted journals |
+| `/hops` | Gateway↔switch↔clearing, bank statement↔TRS |
+| `/agents` | Agent roster, React Flow handoff graph, visual outputs, action queue |
 | `/investigate/:id` | On-demand investigator → action → auditor for one exception |
 
 ## Multi-agent pipeline
@@ -52,6 +67,14 @@ Deterministic SQL views compute matched / unmatched / variance and leakage. The 
 
 Legacy settlement endpoints remain at `/api/settlements` and `/api/legacy/agents/*`.
 
+## Data layer (Neon Postgres)
+
+Runtime reads go to **Neon Postgres** (free tier) via `@neondatabase/serverless`,
+not D1. See `postgres/README.md` for why D1 row-reads blew the free daily cap,
+how summaries are materialized, and how to apply `postgres/001_schema_and_seed.sql`
+plus `postgres/002_summaries.sql`. Dashboard JSON is cached 120s in memory and
+the Cache API. Do not deploy until `DATABASE_URL` is set.
+
 ## Deploy (Workers Free plan)
 
 You need a Cloudflare API token with Workers edit, D1 edit, and Workers AI access, plus account `95f96d50618b771a8c58542029828a1a`.
@@ -71,6 +94,6 @@ No API token secret is required at runtime: the Worker calls `env.AI.run("@cf/me
 
 - **Workers Free:** 100,000 requests/day; 10 ms CPU per request (I/O and Workers AI waits are not CPU). Do not enable Workers Paid, Containers, or other billable add-ons.
 - **D1 Free:** 10 databases / account, 500 MB per database, 5 million rows read / day, 100,000 rows written / day.
-- **Workers AI Free:** 10,000 neurons/day (resets 00:00 UTC). Llama 4 Scout is billed at \$0.27 / M input tokens and \$0.85 / M output tokens (≈24.5k neurons / M input, ≈77.3k neurons / M output). Agent `max_tokens` is 1024. A 13-agent "run all" can use on the order of a thousand neurons; prefer per-domain or single-exception runs if the daily allocation is tight. Further inference fails until the next UTC day unless the account is on Workers Paid.
+- **Workers AI Free:** 10,000 neurons/day (resets 00:00 UTC). Llama 4 Scout is billed at \$0.27 / M input tokens and \$0.85 / M output tokens (≈24.5k neurons / M input, ≈77.3k neurons / M output). Agent `max_tokens` is 1024. A 18-agent "run all" can use on the order of a thousand neurons; prefer per-domain or single-exception runs if the daily allocation is tight. Further inference fails until the next UTC day unless the account is on Workers Paid.
 
 The original Render service is left running and is not required for this deployment.

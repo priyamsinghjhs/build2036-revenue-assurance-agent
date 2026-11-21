@@ -1,11 +1,12 @@
 import type { SettlementListRow, SettlementRow, TransactionRow } from "./types";
+import type { AppDb } from "./pg";
 import {
   pandasToString,
   SETTLEMENT_COLUMNS,
   TRANSACTION_COLUMNS,
 } from "./format";
 
-export async function listSettlements(db: D1Database): Promise<SettlementListRow[]> {
+export async function listSettlements(db: AppDb): Promise<SettlementListRow[]> {
   const { results } = await db
     .prepare(
       "SELECT settlement_id, expected_amount, settled_amount, status FROM settlements ORDER BY settlement_id",
@@ -15,7 +16,7 @@ export async function listSettlements(db: D1Database): Promise<SettlementListRow
 }
 
 export async function getSettlement(
-  db: D1Database,
+  db: AppDb,
   settlementId: string,
 ): Promise<SettlementRow | null> {
   const row = await db
@@ -26,7 +27,7 @@ export async function getSettlement(
 }
 
 export async function getSettlementData(
-  db: D1Database,
+  db: AppDb,
   settlementId: string,
 ): Promise<string | null> {
   const row = await getSettlement(db, settlementId);
@@ -39,7 +40,7 @@ export async function getSettlementData(
 }
 
 export async function getRelatedTransactions(
-  db: D1Database,
+  db: AppDb,
   settlementId: string,
 ): Promise<string> {
   // Same SQL as enrich_with_tools in src/graph.py (LIMIT 10, no ORDER BY).

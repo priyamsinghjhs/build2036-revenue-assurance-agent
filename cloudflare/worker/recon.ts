@@ -1,3 +1,4 @@
+import type { AppDb } from "./pg";
 export type AreaId =
   | "authorization"
   | "scheme"
@@ -10,7 +11,13 @@ export type AreaId =
   | "fx"
   | "pricing"
   | "payouts"
-  | "chargebacks";
+  | "chargebacks"
+  | "billing"
+  | "invoicing"
+  | "cash_ar"
+  | "vendor"
+  | "gl"
+  | "hops";
 
 export const AREA_META: Record<
   AreaId,
@@ -28,6 +35,12 @@ export const AREA_META: Record<
   pricing: { label: "Merchant Pricing", group: "payout", blurb: "MDR billed vs contracted bps" },
   payouts: { label: "Payouts & Reserves", group: "payout", blurb: "Payout vs net settlement, overdue reserves" },
   chargebacks: { label: "Chargebacks & Refunds", group: "payout", blurb: "Unrecovered chargebacks, double refunds" },
+  billing: { label: "Billing / Rating", group: "finance", blurb: "Contract vs rated MDR, per-txn, rental, minimums, VAS, unbilled usage" },
+  invoicing: { label: "Invoicing", group: "finance", blurb: "Billing vs invoices, credit notes, GST/tax lines" },
+  cash_ar: { label: "Cash & AR", group: "finance", blurb: "Invoice vs cash received, short-pays, unapplied cash, ageing" },
+  vendor: { label: "Vendor Costs", group: "finance", blurb: "Gateway/network/scheme/partner invoices vs expected and payments" },
+  gl: { label: "GL / ERP", group: "finance", blurb: "Subledger vs journal entries, unposted and misposted items" },
+  hops: { label: "System hops", group: "lifecycle", blurb: "Gateway↔switch↔clearing, bank statement↔TRS" },
 };
 
 export const AREA_IDS = Object.keys(AREA_META) as AreaId[];
@@ -59,6 +72,17 @@ export function severityOf(leakage: number, category: string): "high" | "medium"
     "chargeback_unrecovered",
     "under_payout",
     "reserve_overdue",
+    "billed_not_invoiced",
+    "unbilled_usage",
+    "unpaid_overdue",
+    "unapplied_cash",
+    "vendor_duplicate_payment",
+    "gl_unposted",
+    "gl_misposted",
+    "gateway_missing_in_switch",
+    "switch_missing_in_clearing",
+    "ar_61_90",
+    "ar_90_plus",
   ]);
   if (highCats.has(category) || leakage >= 5000) return "high";
   if (leakage >= 1000) return "medium";
@@ -90,7 +114,7 @@ export function mapException(row: Record<string, unknown>): ExceptionRow {
 }
 
 export async function listExceptions(
-  db: D1Database,
+  db: AppDb,
   area?: string,
   limit = 80,
 ): Promise<ExceptionRow[]> {
@@ -102,7 +126,7 @@ export async function listExceptions(
   return (results ?? []).map(mapException);
 }
 
-export async function getException(db: D1Database, exceptionId: string): Promise<ExceptionRow | null> {
+export async function getException(db: AppDb, exceptionId: string): Promise<ExceptionRow | null> {
   const parts = exceptionId.split(":");
   if (parts.length < 3) return null;
   const area = parts[0];
@@ -127,154 +151,174 @@ export type AreaSummary = {
   exception_count: number;
 };
 
-const COUNT_SQL: Record<AreaId, string> = {
-  authorization: "SELECT status, COUNT(*) n, SUM(leakage) leakage FROM v_ra_auth_capture GROUP BY status",
-  scheme: `SELECT status, COUNT(*) n, SUM(leakage) leakage FROM (
-      SELECT status, leakage FROM v_ra_capture_scheme
-      UNION ALL SELECT status, leakage FROM v_ra_scheme_fee_var
-    ) GROUP BY status`,
-  bank_trs: `SELECT status, COUNT(*) n, SUM(leakage) leakage FROM (
-      SELECT status, leakage FROM v_ra_scheme_bank
-      UNION ALL SELECT status, leakage FROM v_ra_bank_unidentified
-    ) GROUP BY status`,
-  gateway: "SELECT status, COUNT(*) n, SUM(leakage) leakage FROM v_ra_fee_gateway GROUP BY status",
-  network: "SELECT status, COUNT(*) n, SUM(leakage) leakage FROM v_ra_fee_network GROUP BY status",
-  partner: "SELECT status, COUNT(*) n, SUM(leakage) leakage FROM v_ra_fee_partner GROUP BY status",
-  terminal: "SELECT status, COUNT(*) n, SUM(leakage) leakage FROM v_ra_terminal_recon GROUP BY status",
-  apm: "SELECT status, COUNT(*) n, SUM(leakage) leakage FROM v_ra_apm GROUP BY status",
-  fx: "SELECT status, COUNT(*) n, SUM(leakage) leakage FROM v_ra_fx GROUP BY status",
-  pricing: "SELECT status, COUNT(*) n, SUM(leakage) leakage FROM v_ra_pricing GROUP BY status",
-  payouts: "SELECT status, COUNT(*) n, SUM(leakage) leakage FROM v_ra_payouts GROUP BY status",
-  chargebacks: "SELECT status, COUNT(*) n, SUM(leakage) leakage FROM v_ra_chargebacks GROUP BY status",
-};
-
-export async function summarizeArea(db: D1Database, area: AreaId): Promise<AreaSummary> {
-  const { results } = await db.prepare(COUNT_SQL[area]).all<{ status: string; n: number; leakage: number }>();
-  let matched = 0, unmatched = 0, variance = 0, leakage = 0;
-  for (const r of results ?? []) {
-    leakage += Number(r.leakage ?? 0);
-    if (r.status === "matched") matched += Number(r.n);
-    else if (r.status === "unmatched") unmatched += Number(r.n);
-    else variance += Number(r.n);
+export async function summarizeArea(db: AppDb, area: AreaId): Promise<AreaSummary> {
+  const row = await db
+    .prepare(
+      "SELECT area, label, matched, unmatched, variance, leakage, match_rate, exception_count FROM ra_area_summary WHERE area = ?",
+    )
+    .bind(area)
+    .first<AreaSummary>();
+  if (!row) {
+    return {
+      area,
+      label: AREA_META[area].label,
+      matched: 0,
+      unmatched: 0,
+      variance: 0,
+      leakage: 0,
+      match_rate: 1,
+      exception_count: 0,
+    };
   }
-  const total = matched + unmatched + variance;
   return {
-    area,
-    label: AREA_META[area].label,
-    matched,
-    unmatched,
-    variance,
-    leakage: Math.round(leakage * 100) / 100,
-    match_rate: total ? matched / total : 1,
-    exception_count: unmatched + variance,
+    ...row,
+    matched: Number(row.matched),
+    unmatched: Number(row.unmatched),
+    variance: Number(row.variance),
+    leakage: Number(row.leakage),
+    match_rate: Number(row.match_rate),
+    exception_count: Number(row.exception_count),
   };
 }
 
-export async function summarizeAll(db: D1Database): Promise<AreaSummary[]> {
-  const out: AreaSummary[] = [];
-  for (const area of AREA_IDS) out.push(await summarizeArea(db, area));
-  return out;
-}
-
-export async function leakageByCategory(db: D1Database) {
+export async function summarizeAll(db: AppDb): Promise<AreaSummary[]> {
   const { results } = await db
     .prepare(
-      `SELECT area, category, COUNT(*) AS n, ROUND(SUM(leakage), 2) AS leakage
-       FROM ra_exception_rows GROUP BY area, category ORDER BY leakage DESC`,
+      "SELECT area, label, matched, unmatched, variance, leakage, match_rate, exception_count FROM ra_area_summary",
     )
+    .all<AreaSummary>();
+  const byArea = new Map((results ?? []).map((r) => [r.area, r]));
+  return AREA_IDS.map((area) => {
+    const row = byArea.get(area);
+    if (!row) {
+      return {
+        area,
+        label: AREA_META[area].label,
+        matched: 0,
+        unmatched: 0,
+        variance: 0,
+        leakage: 0,
+        match_rate: 1,
+        exception_count: 0,
+      };
+    }
+    return {
+      ...row,
+      area,
+      matched: Number(row.matched),
+      unmatched: Number(row.unmatched),
+      variance: Number(row.variance),
+      leakage: Number(row.leakage),
+      match_rate: Number(row.match_rate),
+      exception_count: Number(row.exception_count),
+    };
+  });
+}
+
+export async function leakageByCategory(db: AppDb) {
+  const { results } = await db
+    .prepare("SELECT area, category, n, leakage FROM ra_leakage_category ORDER BY leakage DESC")
     .all<{ area: string; category: string; n: number; leakage: number }>();
   return results ?? [];
 }
 
-export async function leakageTrend(db: D1Database) {
+export async function leakageTrend(db: AppDb) {
   const { results } = await db
-    .prepare(
-      `SELECT SUBSTR(COALESCE(ts, 'unknown'), 1, 10) AS day,
-              ROUND(SUM(leakage), 2) AS leakage,
-              COUNT(*) AS n
-       FROM ra_exception_rows
-       WHERE ts IS NOT NULL
-       GROUP BY 1
-       ORDER BY 1`,
-    )
+    .prepare("SELECT day, leakage, n FROM ra_leakage_trend ORDER BY day")
     .all<{ day: string; leakage: number; n: number }>();
   return results ?? [];
 }
 
-export async function moneyFlow(db: D1Database) {
-  const capture = await db.prepare("SELECT ROUND(SUM(amount), 2) AS v FROM ra_captures").first<{ v: number }>();
-  const gw = await db.prepare("SELECT ROUND(SUM(invoiced), 2) AS v FROM ra_gateway_charges").first<{ v: number }>();
-  const schemeGross = await db.prepare("SELECT ROUND(SUM(gross), 2) AS v FROM ra_scheme_settlements").first<{ v: number }>();
-  const schemeNet = await db.prepare("SELECT ROUND(SUM(net), 2) AS v FROM ra_scheme_settlements").first<{ v: number }>();
-  const bank = await db
-    .prepare("SELECT ROUND(SUM(amount), 2) AS v FROM ra_bank_transactions WHERE recon_ref IS NOT NULL")
-    .first<{ v: number }>();
-  const payout = await db.prepare("SELECT ROUND(SUM(amount), 2) AS v FROM ra_payouts").first<{ v: number }>();
-  const leak = await db.prepare("SELECT area, ROUND(SUM(leakage), 2) AS v FROM ra_exception_rows GROUP BY area").all<{ area: string; v: number }>();
-  const leakMap = Object.fromEntries((leak.results ?? []).map((r) => [r.area, Number(r.v)]));
+export async function moneyFlow(db: AppDb) {
+  const row = await db
+    .prepare(
+      "SELECT capture, gateway_fees, scheme_gross, scheme_net, bank, payout, leakage_by_area FROM ra_money_flow WHERE id = 1",
+    )
+    .first<{
+      capture: number;
+      gateway_fees: number;
+      scheme_gross: number;
+      scheme_net: number;
+      bank: number;
+      payout: number;
+      leakage_by_area: Record<string, number> | string;
+    }>();
+  let leak: Record<string, number> = {};
+  if (row?.leakage_by_area) {
+    leak = typeof row.leakage_by_area === "string" ? JSON.parse(row.leakage_by_area) : row.leakage_by_area;
+  }
   return {
-    capture: Number(capture?.v ?? 0),
-    gateway_fees: Number(gw?.v ?? 0),
-    scheme_gross: Number(schemeGross?.v ?? 0),
-    scheme_net: Number(schemeNet?.v ?? 0),
-    bank: Number(bank?.v ?? 0),
-    payout: Number(payout?.v ?? 0),
-    leakage_by_area: leakMap,
+    capture: Number(row?.capture ?? 0),
+    gateway_fees: Number(row?.gateway_fees ?? 0),
+    scheme_gross: Number(row?.scheme_gross ?? 0),
+    scheme_net: Number(row?.scheme_net ?? 0),
+    bank: Number(row?.bank ?? 0),
+    payout: Number(row?.payout ?? 0),
+    leakage_by_area: leak,
   };
 }
 
-export async function areaSeries(db: D1Database, area: AreaId) {
-  if (area === "fx") {
-    const { results } = await db
-      .prepare(
-        `SELECT SUBSTR(ts, 1, 10) AS day,
-                ROUND(AVG(applied_rate), 4) AS applied,
-                ROUND(AVG(reference_rate), 4) AS reference
-         FROM ra_fx_conversions GROUP BY 1 ORDER BY 1`,
-      )
-      .all();
-    return { type: "fx", points: results ?? [] };
-  }
-  if (area === "terminal") {
-    const { results } = await db
-      .prepare(
-        `SELECT status, COUNT(*) n, ROUND(SUM(monthly_rental), 2) rental
-         FROM ra_terminals GROUP BY status`,
-      )
-      .all();
-    return { type: "terminals", points: results ?? [] };
-  }
-  if (area === "apm") {
-    const { results } = await db
-      .prepare(
-        `SELECT method, provider, ROUND(SUM(amount), 2) AS amount
-         FROM ra_apm_reports GROUP BY method, provider ORDER BY amount DESC`,
-      )
-      .all();
-    return { type: "apm", points: results ?? [] };
-  }
-  if (area === "partner" || area === "gateway" || area === "network") {
-    const table =
-      area === "partner" ? "ra_partner_fees" : area === "gateway" ? "ra_gateway_charges" : "ra_network_fees";
-    const { results } = await db
-      .prepare(`SELECT ROUND(SUM(expected), 2) AS expected, ROUND(SUM(invoiced), 2) AS invoiced FROM ${table}`)
-      .all();
-    return { type: "fees", points: results ?? [] };
-  }
-  if (area === "scheme") {
-    const { results } = await db
-      .prepare(
-        `SELECT scheme, COUNT(*) n, ROUND(SUM(gross), 2) gross, ROUND(SUM(interchange + scheme_fee), 2) fees, ROUND(SUM(net), 2) net
-         FROM ra_scheme_settlements GROUP BY scheme ORDER BY gross DESC`,
-      )
-      .all();
-    return { type: "scheme", points: results ?? [] };
-  }
-  const results = await leakageTrend(db);
-  return { type: "trend", points: results };
+export async function areaSeries(db: AppDb, area: AreaId) {
+  const row = await db
+    .prepare("SELECT series_type, points FROM ra_area_series WHERE area = ?")
+    .bind(area)
+    .first<{ series_type: string; points: unknown }>();
+  const points = !row?.points ? [] : typeof row.points === "string" ? JSON.parse(row.points) : row.points;
+  return { type: row?.series_type ?? "trend", points: points ?? [] };
 }
 
-export async function domainSummaryForAgent(db: D1Database, area: AreaId) {
+export async function kpiCounts(db: AppDb) {
+  const row = await db
+    .prepare(
+      "SELECT total_leakage, exception_count, auth_count, merchant_count, match_rate, recovery_potential FROM ra_kpi_summary WHERE id = 1",
+    )
+    .first<{
+      total_leakage: number;
+      exception_count: number;
+      auth_count: number;
+      merchant_count: number;
+      match_rate: number;
+      recovery_potential: number;
+    }>();
+  return {
+    total_leakage: Number(row?.total_leakage ?? 0),
+    exception_count: Number(row?.exception_count ?? 0),
+    auth_count: Number(row?.auth_count ?? 0),
+    merchant_count: Number(row?.merchant_count ?? 0),
+    match_rate: Number(row?.match_rate ?? 1),
+    recovery_potential: Number(row?.recovery_potential ?? 0),
+  };
+}
+
+export type MapNode = { id: string; label: string; lane: string; href: string; x: number; y: number };
+export type MapEdge = {
+  source: string;
+  target: string;
+  href: string;
+  leakage: number;
+  match_rate: number;
+  exceptions: number;
+  label: string;
+};
+
+export async function systemMap(db: AppDb): Promise<{ nodes: MapNode[]; edges: MapEdge[] }> {
+  const nodes = await db
+    .prepare("SELECT id, label, lane, href, x, y FROM ra_system_map_nodes")
+    .all<MapNode>();
+  const edges = await db
+    .prepare("SELECT source, target, href, label, leakage, match_rate, exceptions FROM ra_system_map_edges")
+    .all<MapEdge>();
+  return {
+    nodes: (nodes.results ?? []).map((n) => ({ ...n, x: Number(n.x), y: Number(n.y) })),
+    edges: (edges.results ?? []).map((e) => ({
+      ...e,
+      leakage: Number(e.leakage),
+      match_rate: Number(e.match_rate),
+      exceptions: Number(e.exceptions),
+    })),
+  };
+}
+export async function domainSummaryForAgent(db: AppDb, area: AreaId) {
   const summary = await summarizeArea(db, area);
   const top = await listExceptions(db, area, 8);
   return {
@@ -297,7 +341,7 @@ export async function domainSummaryForAgent(db: D1Database, area: AreaId) {
   };
 }
 
-export async function policyText(db: D1Database, topic: string): Promise<string> {
+export async function policyText(db: AppDb, topic: string): Promise<string> {
   const { results } = await db
     .prepare("SELECT text FROM ra_fee_policies WHERE topic = ? OR topic = 'synthetic'")
     .bind(topic)
@@ -305,14 +349,3 @@ export async function policyText(db: D1Database, topic: string): Promise<string>
   return (results ?? []).map((r) => r.text).join("\n");
 }
 
-export async function kpiCounts(db: D1Database) {
-  const leak = await db.prepare("SELECT ROUND(SUM(leakage), 2) AS v, COUNT(*) AS n FROM ra_exception_rows").first<{ v: number; n: number }>();
-  const auths = await db.prepare("SELECT COUNT(*) AS v FROM ra_authorizations").first<{ v: number }>();
-  const merch = await db.prepare("SELECT COUNT(*) AS v FROM ra_merchants").first<{ v: number }>();
-  return {
-    total_leakage: Number(leak?.v ?? 0),
-    exception_count: Number(leak?.n ?? 0),
-    auth_count: Number(auths?.v ?? 0),
-    merchant_count: Number(merch?.v ?? 0),
-  };
-}

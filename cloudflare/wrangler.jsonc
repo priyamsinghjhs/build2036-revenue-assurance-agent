@@ -14,12 +14,9 @@
   "ai": {
     "binding": "AI"
   },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "revenue-assurance",
-      "database_id": "59a55857-99d4-4c74-82ab-326b2f5f99c3",
-      "migrations_dir": "migrations"
-    }
-  ]
+  "triggers": {
+    "crons": ["15 2 * * *"]
+  },
+  // Runtime database is Neon Postgres via secret DATABASE_URL
+  // (npx wrangler secret put DATABASE_URL). Do not add a D1 binding.
 }

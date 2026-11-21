@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { Card } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 export function KpiCard({
   label,
@@ -11,18 +13,20 @@ export function KpiCard({
   value: string;
   hint?: string;
   icon?: ReactNode;
-  tone?: "leak" | "ok" | "neutral";
+  tone?: "leak" | "ok" | "neutral" | "warn";
 }) {
-  const border =
-    tone === "leak" ? "border-rose-500/40" : tone === "ok" ? "border-emerald-500/30" : "border-white/10";
+  const valueColor =
+    tone === "leak" ? "text-danger" : tone === "ok" ? "text-success" : tone === "warn" ? "text-warning" : "text-ink";
   return (
-    <div className={`rounded-2xl border ${border} bg-[#101827]/90 p-4 shadow-lg shadow-black/20`}>
-      <div className="flex items-center justify-between gap-2 text-xs uppercase tracking-wider text-slate-400">
-        <span>{label}</span>
+    <Card className="min-w-0 overflow-hidden p-4">
+      <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+        <span className="min-w-0 truncate" title={label}>{label}</span>
         {icon}
       </div>
-      <div className="mt-2 text-2xl font-semibold tracking-tight text-white">{value}</div>
-      {hint && <div className="mt-1 text-xs text-slate-400">{hint}</div>}
-    </div>
+      <div className={cn("mt-2 truncate text-2xl font-semibold leading-tight tabular-nums", valueColor)} title={value}>
+        {value}
+      </div>
+      {hint && <div className="mt-1 truncate text-xs text-muted" title={hint}>{hint}</div>}
+    </Card>
   );
 }
