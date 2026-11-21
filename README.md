@@ -54,7 +54,7 @@ The free instance sleeps after 15 minutes of inactivity, so the first visit afte
 
 ## Deploy on Cloudflare Containers
 
-The same Streamlit app can run as a [Cloudflare Container](https://developers.cloudflare.com/containers/) behind a Worker, at `https://revenue-assurance-agent.kalyanachakram.workers.dev`.
+The same Streamlit app can run as a [Cloudflare Container](https://developers.cloudflare.com/containers/) behind a Worker, at `https://build2036-revenue-assurance-agent.kalyanachakram.workers.dev`.
 
 The Worker uses the current Durable Object Container API (the `@cloudflare/containers` package is deprecated). HTTP and WebSocket traffic is forwarded to a single named container instance so Streamlit sessions stick. The container uses instance type `standard-1`, sleeps after 15 minutes of inactivity, and needs outbound Internet for Workers AI.
 
