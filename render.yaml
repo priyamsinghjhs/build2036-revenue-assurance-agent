@@ -12,7 +12,7 @@ services:
       - key: LLM_PROVIDER
         value: cloudflare
       - key: CLOUDFLARE_MODEL
-        value: "@cf/google/gemma-4-26b-a4b-it"
+        value: "@cf/meta/llama-4-scout-17b-16e-instruct"
       - key: CF_ACCOUNT_ID
         sync: false
       - key: CF_AI_API_TOKEN

@@ -5,7 +5,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
-DEFAULT_CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
+DEFAULT_CLOUDFLARE_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct"
 DEFAULT_TEMPERATURE = 0.1
 
 
@@ -30,6 +30,8 @@ def get_llm(provider: str | None = None):
         kwargs = {
             "model": os.getenv("CLOUDFLARE_MODEL", DEFAULT_CLOUDFLARE_MODEL),
             "temperature": temperature,
+            "request_timeout": 90,
+            "max_retries": 1,
         }
         account_id = os.getenv("CF_ACCOUNT_ID")
         api_token = os.getenv("CF_AI_API_TOKEN")
