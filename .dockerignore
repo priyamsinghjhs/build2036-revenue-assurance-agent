@@ -18,3 +18,5 @@ wrangler.jsonc
 package.json
 package-lock.json
 tsconfig.json
+
+proxy-worker
