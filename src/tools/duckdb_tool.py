@@ -1,9 +1,8 @@
 """DuckDB tool for agents to query revenue data."""
-import duckdb
-from pathlib import Path
 from langchain_core.tools import tool
 
-DB_PATH = Path(__file__).parent.parent.parent / "data" / "revenue_assurance.db"
+from src.data.init_db import DB_PATH, connect_readonly, ensure_db
+
 
 @tool
 def query_duckdb(sql: str) -> str:
@@ -12,12 +11,16 @@ def query_duckdb(sql: str) -> str:
     Use this to investigate anomalies, pull related transactions, or check historical patterns.
     """
     try:
-        con = duckdb.connect(str(DB_PATH), read_only=True)
-        result = con.execute(sql).fetchdf()
-        con.close()
-        return result.to_string(index=False)
+        ensure_db()
+        con = connect_readonly()
+        try:
+            result = con.execute(sql).fetchdf()
+            return result.to_string(index=False)
+        finally:
+            con.close()
     except Exception as e:
         return f"Query error: {str(e)}"
+
 
 @tool
 def get_settlement(settlement_id: str) -> str:

@@ -43,7 +43,7 @@ Host the Streamlit app on Render's free web service and call Cloudflare Workers 
 
 1. In the Cloudflare dashboard, create a Workers AI API token and copy your account ID.
 2. Connect this repo as a Render Blueprint (`render.yaml`) or as a Python web service. The Blueprint uses:
-   - **Build:** `pip install -r requirements.txt`
+   - **Build:** `pip install -r requirements.txt && python src/data/init_db.py`
    - **Start:** `streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false`
    - **Health check:** `/_stcore/health`
 3. When prompted, set `CF_ACCOUNT_ID` and `CF_AI_API_TOKEN`. `LLM_PROVIDER` is already set to `cloudflare`, and `CLOUDFLARE_MODEL` defaults to `@cf/meta/llama-4-scout-17b-16e-instruct` (Workers AI text-gen, tool-calling).
