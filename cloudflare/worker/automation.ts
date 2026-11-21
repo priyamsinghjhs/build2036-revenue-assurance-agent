@@ -3,6 +3,7 @@ import { executiveSummary, type ExecPayload } from "./executive";
 import { complete } from "./llm";
 import { getDb, type AppDb } from "./pg";
 import type { Env } from "./types";
+import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 
 function inr(n: number): string {
   const abs = Math.abs(n);
@@ -51,6 +52,22 @@ const ACTION_FOR: Record<string, string> = {
   gl_unposted: "post_journal",
   unapplied_cash: "apply_cash",
   unbilled_usage: "raise_usage_charge",
+  settlement_missing_txn: "include_in_batch",
+  settlement_duplicate_txn: "reverse_duplicate",
+  settlement_wrong_cutoff: "rebatch",
+  settlement_fee_overcharge: "refund_excess_mdr",
+  settlement_net_mismatch: "recast_net",
+  funding_short: "top_up_funding",
+  funding_late: "expedite_funding",
+  funding_failed: "retry_funding",
+  funding_returned: "retry_funding",
+  funding_duplicate: "recover_duplicate_funding",
+  funding_wrong_account: "recall_and_refire",
+  funding_held: "review_hold",
+  acquirer_fee_overcharge: "dispute_acquirer_invoice",
+  acquirer_passthrough_markup: "dispute_passthrough",
+  acquirer_settlement_late: "chase_acquirer",
+  acquirer_statement_unmatched: "match_statement",
 };
 
 export async function seedProposedActions(db: AppDb, runId: string, limit = 8) {
@@ -79,9 +96,9 @@ export async function seedProposedActions(db: AppDb, runId: string, limit = 8) {
         runId,
         exceptionId,
         action,
-        Number(row.leakage ?? 0),
+        normalizeAmount(row.leakage),
         row.currency || "INR",
-        70,
+        normalizeConfidence(70),
         `Deterministic recommendation from ${row.category.replace(/_/g, " ")} (${row.area}).`,
         new Date().toISOString(),
       )

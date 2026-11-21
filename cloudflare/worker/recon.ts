@@ -17,7 +17,10 @@ export type AreaId =
   | "cash_ar"
   | "vendor"
   | "gl"
-  | "hops";
+  | "hops"
+  | "settlement"
+  | "funding"
+  | "acquirer";
 
 export const AREA_META: Record<
   AreaId,
@@ -41,6 +44,9 @@ export const AREA_META: Record<
   vendor: { label: "Vendor Costs", group: "finance", blurb: "Gateway/network/scheme/partner invoices vs expected and payments" },
   gl: { label: "GL / ERP", group: "finance", blurb: "Subledger vs journal entries, unposted and misposted items" },
   hops: { label: "System hops", group: "lifecycle", blurb: "Gateway↔switch↔clearing, bank statement↔TRS" },
+  settlement: { label: "Merchant Settlement", group: "lifecycle", blurb: "Batch cut-off, fee deductions, gross-to-net, captures vs inclusion" },
+  funding: { label: "Merchant Funding", group: "lifecycle", blurb: "NEFT/RTGS/IMPS transfers, SLA, wrong account, held or returned funds" },
+  acquirer: { label: "Acquirer / Sponsor", group: "lifecycle", blurb: "Sponsor-bank volumes, fee pass-through, invoices vs contract, statement recon" },
 };
 
 export const AREA_IDS = Object.keys(AREA_META) as AreaId[];
@@ -83,6 +89,19 @@ export function severityOf(leakage: number, category: string): "high" | "medium"
     "switch_missing_in_clearing",
     "ar_61_90",
     "ar_90_plus",
+    "settlement_missing_txn",
+    "settlement_duplicate_txn",
+    "settlement_fee_overcharge",
+    "settlement_net_mismatch",
+    "funding_short",
+    "funding_failed",
+    "funding_returned",
+    "funding_duplicate",
+    "funding_wrong_account",
+    "funding_held",
+    "acquirer_fee_overcharge",
+    "acquirer_passthrough_markup",
+    "acquirer_statement_unmatched",
   ]);
   if (highCats.has(category) || leakage >= 5000) return "high";
   if (leakage >= 1000) return "medium";

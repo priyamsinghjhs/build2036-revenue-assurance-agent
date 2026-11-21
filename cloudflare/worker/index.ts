@@ -31,6 +31,7 @@ import { getDb } from "./pg";
 import { cachedJson, invalidateMem } from "./cache";
 import { executiveSummary, listFilterOptions } from "./executive";
 import { latestAutomation, runDailyAutomation, setActionStatus } from "./automation";
+import { publicErrorMessage } from "../shared/errors";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -258,8 +259,7 @@ app.post("/api/legacy/agents/audit", async (c) => {
 app.onError((err, c) => {
   if (err instanceof HTTPException) return err.getResponse();
   if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
-  const message = err instanceof Error ? err.message : String(err);
-  return c.json({ error: message }, 500);
+  return c.json({ error: publicErrorMessage(err) }, 500);
 });
 
 async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<Record<string, unknown>> {

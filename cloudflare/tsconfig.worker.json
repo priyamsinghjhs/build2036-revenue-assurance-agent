@@ -12,5 +12,5 @@
     "noUnusedParameters": true,
     "types": []
   },
-  "include": ["worker"]
+  "include": ["worker", "shared"]
 }
