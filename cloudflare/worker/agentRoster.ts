@@ -23,6 +23,8 @@ export type AgentId =
   | "recon_aml"
   | "recon_network"
   | "recon_success"
+  | "recon_files"
+  | "contract_extract"
   | "gap_detection"
   | "investigator"
   | "action"
@@ -58,6 +60,8 @@ export const AGENT_ROSTER: {
   { id: "recon_interfaces", name: "Interface monitoring agent", role: "Interprets hop-count drops, duplicates and latency from pre-aggregated daily funnels", kind: "reconciliation", domain: "interfaces" },
   { id: "recon_aml", name: "AML / fraud agent", role: "Interprets rule-based structuring, refund abuse, round-trip, velocity and dormant-burst flags", kind: "reconciliation", domain: "aml" },
   { id: "recon_network", name: "Network risk agent", role: "Interprets graph scores: shared accounts or devices, cycles, known-bad proximity, changed accounts", kind: "reconciliation", domain: "network_risk" },
+  { id: "recon_files", name: "File completeness agent", role: "Interprets missing and out-of-sequence scheme, bank and APM files", kind: "reconciliation", domain: "files" },
+  { id: "contract_extract", name: "Contract extraction agent", role: "Extracts structured rules from contracts with citations for human approval", kind: "reconciliation", domain: "contracts" },
   { id: "recon_success", name: "Success-rate agent", role: "Interprets approval and decline patterns by channel, acquirer, APM and EMI", kind: "reconciliation", domain: "success" },
   { id: "gap_detection", name: "Gap / Leakage Detection", role: "Prioritises leakage themes across domains", kind: "gap" },
   { id: "investigator", name: "Investigator / Root-cause", role: "Explains why the top gaps exist", kind: "investigate" },
@@ -66,7 +70,7 @@ export const AGENT_ROSTER: {
 ];
 
 const ON_DEMAND_RECON: AgentId[] = [
-  "recon_config","recon_tax","recon_kyc","recon_interfaces","recon_aml","recon_network","recon_success",
+  "recon_config","recon_tax","recon_kyc","recon_interfaces","recon_aml","recon_network","recon_success","recon_files","contract_extract",
 ];
 /** Full roster minus on-demand governance/risk recon agents, to stay within the free neuron budget.
  *  Run those domains individually (orchestrator + one recon + gap + investigator + action + auditor). */
@@ -104,6 +108,8 @@ export const AGENT_GRAPH_EDGES: { source: AgentId; target: AgentId }[] = [
   { source: "orchestrator", target: "recon_aml" },
   { source: "orchestrator", target: "recon_network" },
   { source: "orchestrator", target: "recon_success" },
+  { source: "orchestrator", target: "recon_files" },
+  { source: "orchestrator", target: "contract_extract" },
   { source: "recon_authorization", target: "gap_detection" },
   { source: "recon_scheme", target: "gap_detection" },
   { source: "recon_network_gateway", target: "gap_detection" },
@@ -127,6 +133,8 @@ export const AGENT_GRAPH_EDGES: { source: AgentId; target: AgentId }[] = [
   { source: "recon_aml", target: "gap_detection" },
   { source: "recon_network", target: "gap_detection" },
   { source: "recon_success", target: "gap_detection" },
+  { source: "recon_files", target: "gap_detection" },
+  { source: "contract_extract", target: "gap_detection" },
   { source: "gap_detection", target: "investigator" },
   { source: "investigator", target: "action" },
   { source: "action", target: "auditor" },

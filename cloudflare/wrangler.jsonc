@@ -3,6 +3,7 @@
   "account_id": "95f96d50618b771a8c58542029828a1a",
   "main": "worker/index.ts",
   "compatibility_date": "2026-11-21",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
   "assets": {

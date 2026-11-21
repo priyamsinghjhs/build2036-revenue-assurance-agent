@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { Play, RefreshCw } from "lucide-react";
 import { api, type ExceptionRow } from "@/api";
 import { ExceptionTable } from "@/components/ExceptionTable";
@@ -39,6 +39,17 @@ export default function InvestigatePage() {
       .exception(exceptionId)
       .then((r) => setRow(r.exception))
       .catch((e) => setError(publicErrorMessage(e, "Couldn't load this exception. Please try another.")));
+    api
+      .latest(`exception:${exceptionId}`)
+      .then((r) => {
+        const next: Record<string, Record<string, unknown>> = {};
+        for (const o of r.latest?.outputs ?? []) {
+          const out = o.output;
+          if (out && typeof out === "object") next[o.agent_id] = out as Record<string, unknown>;
+        }
+        setOutputs(next);
+      })
+      .catch(() => undefined);
   }, [exceptionId]);
 
   async function run() {
@@ -124,7 +135,7 @@ export default function InvestigatePage() {
                     Step {i + 1} {active ? "· running" : out ? "· done" : ""}
                   </div>
                   <div className="mt-1 font-semibold capitalize">{id}</div>
-                  {out && <VisualOutput id={id} output={out} />}
+                  {out && <VisualOutput id={id} output={out} exceptionId={row.exception_id} />}
                   {!out && <p className="mt-2 text-xs text-muted">Waiting</p>}
                 </li>
               );
@@ -136,10 +147,13 @@ export default function InvestigatePage() {
   );
 }
 
-function VisualOutput({ id, output }: { id: string; output: Record<string, unknown> }) {
+function VisualOutput({ id, output, exceptionId }: { id: string; output: Record<string, unknown>; exceptionId?: string }) {
   const conf = output.confidence != null && output.confidence !== "" ? normalizeConfidence(output.confidence) : null;
   return (
     <div className="mt-3 space-y-2 text-xs text-slate-600">
+      {output.verification === "unverified" && id !== "auditor" && (
+        <p className="text-warning">Unverified output — not grounded in the SQL facts. Routed to the review queue.</p>
+      )}
       {id === "investigator" && (
         <>
           <div className="text-sm text-ink">{String(output.root_cause || output.summary || "")}</div>
@@ -180,7 +194,22 @@ function VisualOutput({ id, output }: { id: string; output: Record<string, unkno
       )}
       {id === "auditor" && (
         <>
-          {typeof output.signoff === "string" && <SeverityBadge value={output.signoff} />}
+          {(() => {
+            const status = String(output.signoff ?? output.status ?? "");
+            if (!status) return null;
+            const badge = <SeverityBadge value={status} />;
+            if (status === "needs_review" && exceptionId) {
+              return (
+                <Link to={`/review/${encodeURIComponent(exceptionId)}`} className="inline-flex" title="Open human review">
+                  {badge}
+                </Link>
+              );
+            }
+            return badge;
+          })()}
+          {output.verification === "unverified" && (
+            <p className="text-xs text-warning">Unverified — grounding check failed. Do not treat as fact.{exceptionId ? " " : ""}{exceptionId ? <Link to={`/review/${encodeURIComponent(exceptionId)}`} className="underline">Open review</Link> : null}</p>
+          )}
           {typeof output.cfo_one_liner === "string" && <p className="text-sm text-white">{output.cfo_one_liner}</p>}
         </>
       )}

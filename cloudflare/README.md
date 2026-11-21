@@ -16,10 +16,10 @@ See `postgres/README.md` for apply steps. Do not bind D1. Hyperdrive is not used
 Graphical payment-acquiring revenue assurance app on the **Workers Free** plan.
 
 - **Frontend:** React + TypeScript + Vite + Tailwind CSS, Recharts, React Flow, lucide-react
-- **Worker:** TypeScript (Hono) + D1 + Workers AI binding `env.AI`
+- **Worker:** TypeScript (Hono) + Neon Postgres + Workers AI binding `env.AI`
 - **URL:** `https://build2036-revenue-assurance-agent.kalyanachakram.workers.dev`
 
-SQL does the matching math. Agents only interpret compact summaries, prioritize gaps, and recommend actions. Dashboard pages never call the LLM. Agent JSON is cached in D1 (`ra_agent_runs`, `ra_agent_outputs`, `ra_action_queue`).
+SQL does the matching math. Agents only interpret compact summaries, prioritize gaps, and recommend actions. Dashboard pages never call the LLM. Agent JSON is cached in Neon (`ra_agent_runs`, `ra_agent_outputs`, `ra_action_queue`). An optional offline compiler lives in `tools/offline/neuro_symbolic_auditor.py` (Docling + Ollama + DuckDB); the live app uses Workers AI, a JS SQL AST validator and Postgres NUMERIC tests instead.
 
 All data is **synthetic** (seed=2036, October 2026 book) and labelled `is_synthetic = 1`.
 
@@ -59,6 +59,16 @@ All data is **synthetic** (seed=2036, October 2026 book) and labelled `is_synthe
 | `/trace` | End-to-end journey for a txn, batch or invoice id |
 | `/agents` | Agent roster, React Flow handoff graph, visual outputs, action queue |
 | `/investigate/:id` | On-demand investigator → action → auditor for one exception |
+| `/contracts` | Contract documents, extracted rules, citations, edge-case tests and approval |
+| `/anomalies` | z-score / EWMA sensors and on-demand investigation |
+| `/routing` | Offline routing simulation (synthetic data) |
+| `/ask` | Natural-language questions against allow-listed views |
+| `/cases` | Root-cause cases, Kanban, SLA and history |
+| `/risks` | Risk library mapped to controls and findings |
+| `/files` | Missing and out-of-sequence daily files |
+| `/ingestion` | Canonical settlement rows from camt.053, NPCI UPI, IPM and BASE II samples |
+| `/review` | Human review queue for auditor needs_review items |
+| `/review/:id` | Approve, reject or send back with a mandatory comment |
 
 ## Multi-agent pipeline
 
@@ -115,3 +125,18 @@ No API token secret is required at runtime: the Worker calls `env.AI.run("@cf/me
 - **Workers AI Free:** 10,000 neurons/day (resets 00:00 UTC). Llama 4 Scout is billed at \$0.27 / M input tokens and \$0.85 / M output tokens (≈24.5k neurons / M input, ≈77.3k neurons / M output). Agent `max_tokens` is 1024. A 18-agent "run all" can use on the order of a thousand neurons; prefer per-domain or single-exception runs if the daily allocation is tight. Further inference fails until the next UTC day unless the account is on Workers Paid.
 
 The original Render service is left running and is not required for this deployment.
+
+
+## AI quality and evaluations
+
+After every LLM agent step the Worker runs a **deterministic grounding check**: numbers, amounts, IDs, dates and merchants in the output must appear in (or be derivable from) the SQL facts that were passed in. Faithfulness is supported claims / total claims. On failure the same agent is re-prompted with the unsupported claims (at most two reworks). If it still fails, the output is marked `unverified`, is not presented as fact, and is routed to the Review queue. An optional LLM-as-judge pass is deliberately **not** used at runtime, so the free neuron budget stays with the agents themselves. Prompts require the model to answer only from the provided context and to say `insufficient data` when a fact is missing; temperature is 0.
+
+The Agents page has an **AI quality** panel (faithfulness, hallucination rate, reworks, unverified count per agent). The Executive summary shows a compact faithfulness KPI.
+
+Offline and in CI, `evals/` runs a [DeepEval](https://github.com/confident-ai/deepeval) suite (Faithfulness, Hallucination, Answer Relevancy, and Contextual Recall/Precision for contract RAG) using Workers AI as both the model-under-test and the judge. The GitHub Actions workflow (`.github/workflows/evals.yml`) skips cleanly when `CF_ACCOUNT_ID` and `CF_AI_API_TOKEN` are not set; a maintainer must add those secrets — they are not stored in this repository. `evals/benchmark_models.py` compares alternative Workers AI models on the same goldens; `evals/rejected_to_goldens.py` turns reviewer-rejected outputs into new goldens.
+
+Contract retrieval is **hybrid**: Postgres full-text (`ts_rank`, BM25-ish) plus pgvector, with an optional `@cf/baai/bge-reranker-base` rerank (this model is included in the shared Workers AI free neuron allocation). Seed chunks are clause-sized (~400–600 characters).
+
+## Cloudflare Code Mode
+
+Worker Loaders / Dynamic Workers (the sandbox used for Cloudflare Code Mode) are **not available on the Workers Free plan** — they require Workers Paid, and a free-account deploy with a `worker_loaders` binding is rejected. The investigator therefore keeps using deterministic SQL graph tools attached to its input, and Ask-your-data keeps using validated SELECT-only SQL under `ra_readonly`. Code Mode is skipped until the account is on a paid plan.

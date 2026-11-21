@@ -40,7 +40,24 @@ export type ExecPayload = {
     interface_drop_pct: number;
     success_rate: number;
   } | null;
+  intelligence: {
+    contracts_pending: number;
+    contracts_approved: number;
+    contract_leakage: number;
+    anomaly_open: number;
+    routing_uplift: number;
+    routing_savings: number;
+    cases_open: number;
+    cases_overdue: number;
+    files_missing: number;
+    risks_total: number;
+    risks_gap: number;
+    reviews_pending: number;
+    ai_faithfulness: number;
+    ai_unverified: number;
+  } | null;
 };
+
 
 export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
   const [kpi] = (
@@ -133,6 +150,13 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
     .filter((r) => r.n > 0 || r.bucket !== "unknown");
 
   const gov = await db.prepare("SELECT * FROM ra_governance_kpi WHERE id = 1").first<Record<string, unknown>>();
+  const intel = await db.prepare("SELECT * FROM ra_intel_kpi WHERE id = 1").first<Record<string, unknown>>();
+  const reviews = await db.prepare(`SELECT COUNT(*)::int AS n FROM (SELECT DISTINCT exception_id FROM v_ra_review_queue WHERE review_status='pending') q`).first<{ n: number }>();
+  let evals: { faith: number; unverified: number } = { faith: 0, unverified: 0 };
+  try {
+    const ev = await db.prepare(`SELECT COALESCE(AVG(faithfulness),0) AS faith, COUNT(*) FILTER (WHERE verification='unverified')::int AS unverified FROM ra_eval_scores`).first<{ faith: number; unverified: number }>();
+    if (ev) evals = ev;
+  } catch { /* ra_eval_scores may be absent on a stale schema */ }
 
   let bullets: string[] = [];
   if (brief?.bullets) {
@@ -190,6 +214,24 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
           aml_exposure: Number(gov.aml_exposure ?? 0),
           interface_drop_pct: Number(gov.interface_drop_pct ?? 0),
           success_rate: Number(gov.success_rate ?? 0),
+        }
+      : null,
+    intelligence: intel
+      ? {
+          contracts_pending: Number(intel.contracts_pending ?? 0),
+          contracts_approved: Number(intel.contracts_approved ?? 0),
+          contract_leakage: Number(intel.contract_leakage ?? 0),
+          anomaly_open: Number(intel.anomaly_open ?? 0),
+          routing_uplift: Number(intel.routing_uplift ?? 0),
+          routing_savings: Number(intel.routing_savings ?? 0),
+          cases_open: Number(intel.cases_open ?? 0),
+          cases_overdue: Number(intel.cases_overdue ?? 0),
+          files_missing: Number(intel.files_missing ?? 0),
+          risks_total: Number(intel.risks_total ?? 0),
+          risks_gap: Number(intel.risks_gap ?? 0),
+          reviews_pending: Number(reviews?.n ?? 0),
+          ai_faithfulness: Number(evals.faith ?? 0),
+          ai_unverified: Number(evals.unverified ?? 0),
         }
       : null,
   };

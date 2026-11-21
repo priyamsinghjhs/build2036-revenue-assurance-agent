@@ -1,0 +1,11 @@
+[
+  {
+    "name": "recover-amount-from-context",
+    "context": "Exception CAP00216 leakage 18450.00 merchant MER004. Recommended type recover.",
+    "input": "Propose an action with amount.",
+    "expected_output": "{\"actions\":[{\"type\":\"recover\",\"target\":\"MER004\",\"amount\":18450,\"currency\":\"INR\",\"rationale\":\"Recover missing scheme settlement leakage of 18450.00\"}]}",
+    "retrieval_context": [
+      "leakage 18450.00 merchant MER004"
+    ]
+  }
+]

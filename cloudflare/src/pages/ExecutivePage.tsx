@@ -155,6 +155,75 @@ export default function ExecutivePage() {
         </Card>
       )}
 
+      {data.intelligence && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Intelligence and review</CardTitle>
+            <CardDescription>
+              Contract leakage is included in the book figure. File exposure and open anomalies are operational, not booked leakage.
+              Routing figures are a simulation on synthetic data. Auditor needs_review items wait in the review queue.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard
+                label="Pending reviews"
+                value={String(data.intelligence.reviews_pending)}
+                hint="Auditor needs_review items"
+                tone={data.intelligence.reviews_pending ? "warn" : "ok"}
+              />
+              <KpiCard
+                label="Contract leakage"
+                value={inr(data.intelligence.contract_leakage, true)}
+                hint={`${data.intelligence.contracts_pending} rules pending · ${data.intelligence.contracts_approved} approved`}
+                tone="leak"
+              />
+              <KpiCard
+                label="Open anomalies"
+                value={String(data.intelligence.anomaly_open)}
+                hint={`${data.intelligence.files_missing} missing files · operational`}
+                tone="warn"
+              />
+              <KpiCard
+                label="Routing uplift"
+                value={pct(data.intelligence.routing_uplift)}
+                hint={`Fee delta ${inr(data.intelligence.routing_savings, true)} · simulation`}
+                tone="ok"
+              />
+              <KpiCard
+                label="Open cases"
+                value={String(data.intelligence.cases_open)}
+                hint={`${data.intelligence.cases_overdue} overdue SLA`}
+                tone={data.intelligence.cases_overdue ? "warn" : "ok"}
+              />
+              <KpiCard
+                label="Risk coverage gaps"
+                value={`${data.intelligence.risks_gap}/${data.intelligence.risks_total}`}
+                hint="Risks without a passing mapped control"
+                tone={data.intelligence.risks_gap ? "warn" : "ok"}
+              />
+              <KpiCard
+                label="AI faithfulness"
+                value={pct(data.intelligence.ai_faithfulness || 0)}
+                hint={`${data.intelligence.ai_unverified} unverified outputs · review queue`}
+                tone={data.intelligence.ai_unverified ? "warn" : "ok"}
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              <Link to="/review" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Review queue{data.intelligence.reviews_pending ? ` (${data.intelligence.reviews_pending})` : ""}</Link>
+              <Link to="/contracts" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Contracts &amp; rules</Link>
+              <Link to="/anomalies" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Anomalies</Link>
+              <Link to="/routing" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Routing</Link>
+              <Link to="/ask" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Ask your data</Link>
+              <Link to="/cases" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Cases</Link>
+              <Link to="/risks" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Risk library</Link>
+              <Link to="/files" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">File completeness</Link>
+              <Link to="/ingestion" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">File ingestion</Link>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Leadership brief</CardTitle>

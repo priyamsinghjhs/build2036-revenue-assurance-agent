@@ -1,0 +1,12 @@
+[
+  {
+    "name": "commercial-credit-cap",
+    "context": "Schedule A: UPI P2M Transactions: Zero (0.00) MDR fee. Commercial Credit Cards: 0.35% for amounts strictly greater than 10,000.00, capped at 150.00. Amounts <= 10,000.00 incur a flat fee of 25.00.",
+    "input": "What fee applies to a 50,000 commercial credit transaction?",
+    "expected_output": "The fee is 0.35% capped at 150.00, so expected_fee is 150.00.",
+    "retrieval_context": [
+      "UPI P2M Transactions: Zero (0.00) MDR fee for all transaction values.",
+      "Commercial Credit Cards: 0.35% of transaction value for amounts strictly greater than 10,000.00, capped at 150.00 per transaction. Amounts <= 10,000.00 incur a flat fee of 25.00."
+    ]
+  }
+]

@@ -4,6 +4,7 @@ import { complete } from "./llm";
 import { getDb, type AppDb } from "./pg";
 import type { Env } from "./types";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
+import { investigateAnomaly } from "./intel";
 
 function inr(n: number): string {
   const abs = Math.abs(n);
@@ -216,7 +217,11 @@ export async function runDailyAutomation(env: Env, opts: { force?: boolean } = {
     detail.narrative = await upsertNarrative(env, exec, Boolean(opts.force));
     detail.actions_seeded = await seedProposedActions(db, run.run_id);
     try {
-      detail.investigation = await investigateTop(env, run.run_id);
+      const ev = await db
+        .prepare("SELECT event_id FROM ra_anomaly_events WHERE status='open' AND investigated_run IS NULL ORDER BY ABS(COALESCE(zscore,0)) DESC LIMIT 1")
+        .first<{ event_id: string }>();
+      if (ev) detail.investigation = await investigateAnomaly(env, ev.event_id);
+      else detail.investigation = await investigateTop(env, run.run_id);
     } catch (err) {
       detail.investigation_error = err instanceof Error ? err.message : String(err);
     }

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic ISO 20022 camt.053 sample for Revenue Assurance. Not a live bank statement. -->
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.08">
+  <BkToCstmrStmt>
+    <GrpHdr>
+      <MsgId>CAMT053-20261022-001</MsgId>
+      <CreDtTm>2026-10-22T18:30:00+05:30</CreDtTm>
+    </GrpHdr>
+    <Stmt>
+      <Id>STMT-20261022</Id>
+      <Acct><Id><Othr><Id>TRSBANK-IN-001</Id></Othr></Id></Acct>
+      <Ntry>
+        <Amt Ccy="INR">25000.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <NtryDtls>
+          <TxDtls>
+            <Refs>
+              <EndToEndId>E2E-MER001-1001</EndToEndId>
+              <TxId>TXN-CAMT-1001</TxId>
+            </Refs>
+            <AmtDtls>
+              <InstdAmt><Amt Ccy="INR">25000.00</Amt></InstdAmt>
+              <TxAmt><Amt Ccy="INR">25000.00</Amt></TxAmt>
+            </AmtDtls>
+            <RltdPties><Cdtr><Nm>PayStreet Retail</Nm></Cdtr></RltdPties>
+            <RmtInf><Strd><RfrdDocInf><Nb>INV-MER001-1001</Nb></RfrdDocInf><AddtlRmtInf>MCC 5411</AddtlRmtInf></Strd></RmtInf>
+            <SplmtryData>
+              <Envlp>
+                <IntrBkSttlmAmt Ccy="INR">25000.00</IntrBkSttlmAmt>
+              </Envlp>
+            </SplmtryData>
+          </TxDtls>
+        </NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">17875.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <NtryDtls>
+          <TxDtls>
+            <Refs>
+              <EndToEndId>E2E-MER004-1002</EndToEndId>
+              <TxId>TXN-CAMT-1002</TxId>
+            </Refs>
+            <AmtDtls>
+              <InstdAmt><Amt Ccy="INR">18000.00</Amt></InstdAmt>
+              <TxAmt><Amt Ccy="INR">17875.00</Amt></TxAmt>
+            </AmtDtls>
+            <ChrgsInf>
+              <Amt Ccy="INR">125.00</Amt>
+              <Agt><FinInstnId><BICFI>SCBLINBBXXX</BICFI><Nm>INTERMEDIARY-SCB</Nm></FinInstnId></Agt>
+            </ChrgsInf>
+            <RltdPties><Cdtr><Nm>QuickMart</Nm></Cdtr></RltdPties>
+            <RmtInf><Strd><RfrdDocInf><Nb>INV-MER004-1002</Nb></RfrdDocInf></Strd></RmtInf>
+            <SplmtryData>
+              <Envlp>
+                <IntrBkSttlmAmt Ccy="INR">17875.00</IntrBkSttlmAmt>
+              </Envlp>
+            </SplmtryData>
+          </TxDtls>
+        </NtryDtls>
+      </Ntry>
+    </Stmt>
+  </BkToCstmrStmt>
+</Document>

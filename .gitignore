@@ -10,3 +10,6 @@ node_modules/
 .wrangler/
 .dev.vars
 worker-configuration.d.ts
+
+# Local eval artifacts
+evals/benchmark_results.json

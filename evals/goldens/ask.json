@@ -1,0 +1,11 @@
+[
+  {
+    "name": "select-only-sql",
+    "context": "Allow-listed views: v_ask_areas (area, leakage, exception_count), v_ask_kpis (total_leakage).",
+    "input": "Which domains have the most leakage?",
+    "expected_output": "SELECT area, leakage FROM v_ask_areas ORDER BY leakage DESC LIMIT 50",
+    "retrieval_context": [
+      "v_ask_areas area leakage exception_count"
+    ]
+  }
+]

@@ -33,6 +33,14 @@ import { executiveSummary, listFilterOptions } from "./executive";
 import { latestAutomation, runDailyAutomation, setActionStatus } from "./automation";
 import { traceJourney } from "./trace";
 import { networkExportCsv, networkRisk } from "./network";
+import {
+  applyLearning, askData, decideDraft, decideRule, exportDraft, extractContractRules,
+  getCase, getDocument, getExplanation, getReview, graphTools, intelOverview,
+  investigateAnomaly, learningState, listAnomalies, listCases, listDocuments,
+  listDrafts, listFiles, listReviews, listRisks, retrieveChunks, routingSummary,
+  runRoutingSim, simulateRule, submitReview, updateCase, testRule, ruleTests, evalQuality,
+} from "./intel";
+import { listIngestion, persistIngestion } from "./ingest";
 import { publicErrorMessage } from "../shared/errors";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -318,6 +326,120 @@ app.get("/api/network-risk/export", async (c) => {
     },
   });
 });
+
+
+app.get("/api/intel", async (c) => c.json(await intelOverview(getDb(c.env))));
+app.get("/api/eval/quality", async (c) => c.json(await evalQuality(getDb(c.env))));
+app.get("/api/contracts", async (c) => c.json(await listDocuments(getDb(c.env))));
+app.get("/api/contracts/documents/:id", async (c) => {
+  const doc = await getDocument(getDb(c.env), c.req.param("id"));
+  if (!doc) return c.json({ error: "Document not found" }, 404);
+  return c.json(doc);
+});
+app.post("/api/contracts/extract", async (c) => {
+  const body = await readJson(c);
+  const id = String(body.doc_id || body.document_id || "");
+  if (!id) return c.json({ error: "doc_id is required" }, 400);
+  return c.json(await extractContractRules(c.env, id));
+});
+app.post("/api/contracts/rules/:id/decision", async (c) => {
+  const body = await readJson(c);
+  const status = body.status === "rejected" ? "rejected" : "approved";
+  return c.json({ rule: await decideRule(getDb(c.env), c.req.param("id"), status, String(body.reviewer || "Priyam Singh")) });
+});
+app.get("/api/contracts/search", async (c) => {
+  const q = (c.req.query("q") ?? "").trim();
+  if (!q) return c.json({ chunks: [] });
+  return c.json(await retrieveChunks(c.env, q));
+});
+app.get("/api/anomalies", async (c) => c.json(await listAnomalies(getDb(c.env))));
+app.post("/api/anomalies/investigate", async (c) => {
+  const body = await readJson(c).catch(() => ({} as Record<string, unknown>));
+  return c.json(await investigateAnomaly(c.env, body.event_id ? String(body.event_id) : undefined));
+});
+app.get("/api/routing", async (c) => c.json(await routingSummary(getDb(c.env))));
+app.post("/api/routing/simulate", async (c) => c.json(await runRoutingSim(getDb(c.env))));
+app.get("/api/cases", async (c) => c.json(await listCases(getDb(c.env))));
+app.get("/api/cases/:id", async (c) => {
+  const row = await getCase(getDb(c.env), c.req.param("id"));
+  if (!row) return c.json({ error: "Case not found" }, 404);
+  return c.json(row);
+});
+app.post("/api/cases/:id", async (c) => {
+  const body = await readJson(c);
+  return c.json(await updateCase(getDb(c.env), c.req.param("id"), {
+    status: body.status ? String(body.status) : undefined,
+    owner: body.owner ? String(body.owner) : undefined,
+    comment: body.comment ? String(body.comment) : undefined,
+    actor: body.actor ? String(body.actor) : undefined,
+  }));
+});
+app.get("/api/reviews", async (c) => c.json(await listReviews(getDb(c.env))));
+app.get("/api/reviews/:id", async (c) => {
+  const row = await getReview(getDb(c.env), c.req.param("id"));
+  if (!row) return c.json({ error: "Review item not found" }, 404);
+  return c.json(row);
+});
+app.post("/api/reviews/:id/decision", async (c) => {
+  const body = await readJson(c);
+  const decision = String(body.decision || "");
+  if (decision !== "approved" && decision !== "rejected" && decision !== "reinvestigate") {
+    return c.json({ error: "decision must be approved, rejected or reinvestigate" }, 400);
+  }
+  return c.json(await submitReview(c.env, c.req.param("id"), {
+    decision,
+    comment: String(body.comment || ""),
+    amount_override: body.amount_override == null ? undefined : Number(body.amount_override),
+    reviewer: body.reviewer ? String(body.reviewer) : undefined,
+  }));
+});
+app.get("/api/ask/schema", (c) => c.json({ views: ["v_ask_kpis","v_ask_areas","v_ask_exceptions","v_ask_controls","v_ask_anomalies","v_ask_contracts","v_ask_cases","v_ask_files","v_ask_routing","v_ask_risks","v_ask_clearing"] }));
+app.post("/api/ask", async (c) => {
+  const body = await readJson(c);
+  const q = String(body.question || "").trim();
+  if (!q) return c.json({ error: "question is required" }, 400);
+  return c.json(await askData(c.env, q));
+});
+app.get("/api/explain", async (c) => {
+  const type = c.req.query("type") || "control";
+  const id = c.req.query("id") || "";
+  if (!id) return c.json({ error: "id is required" }, 400);
+  return c.json(await getExplanation(c.env, type, id, c.req.query("refresh") === "1"));
+});
+app.post("/api/rules/simulate", async (c) => {
+  const body = await readJson(c);
+  return c.json(await simulateRule(getDb(c.env), {
+    metric: body.metric ? String(body.metric) : undefined,
+    z: body.z == null ? undefined : Number(body.z),
+    control_id: body.control_id ? String(body.control_id) : undefined,
+    match_rate: body.match_rate == null ? undefined : Number(body.match_rate),
+  }));
+});
+app.get("/api/drafts", async (c) => c.json(await listDrafts(getDb(c.env))));
+app.post("/api/drafts/:id/decision", async (c) => {
+  const body = await readJson(c);
+  const status = body.status === "rejected" ? "rejected" : "approved";
+  return c.json({ draft: await decideDraft(getDb(c.env), c.req.param("id"), status, String(body.reviewer || "Priyam Singh")) });
+});
+app.get("/api/drafts/:id/export", async (c) => {
+  const row = await exportDraft(getDb(c.env), c.req.param("id"));
+  if (!row) return c.json({ error: "Draft not found" }, 404);
+  return new Response(row.text, {
+    headers: { "content-type": "text/plain; charset=utf-8", "content-disposition": `attachment; filename="${row.filename}"` },
+  });
+});
+app.get("/api/learning", async (c) => c.json(await learningState(getDb(c.env))));
+app.post("/api/learning/apply", async (c) => c.json(await applyLearning(getDb(c.env))));
+app.get("/api/risks", async (c) => c.json(await listRisks(getDb(c.env))));
+app.get("/api/files", async (c) => c.json(await listFiles(getDb(c.env))));
+app.get("/api/graph-query", async (c) => c.json(await graphTools(getDb(c.env), { merchant_id: c.req.query("merchant_id") || undefined, exception_id: c.req.query("exception_id") || undefined })));
+
+
+
+app.get("/api/contracts/rules/:id/tests", async (c) => c.json(await ruleTests(c.env, c.req.param("id"))));
+app.post("/api/contracts/rules/:id/test", async (c) => c.json(await testRule(c.env, c.req.param("id"))));
+app.get("/api/ingestion", async (c) => c.json(await listIngestion(getDb(c.env))));
+app.post("/api/ingestion/parse", async (c) => c.json(await persistIngestion(getDb(c.env))));
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return err.getResponse();

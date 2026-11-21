@@ -1,0 +1,11 @@
+[
+  {
+    "name": "needs-review-from-facts",
+    "context": "Investigator: missing scheme file CAP00216 leakage 18450. Action: recover 18450 INR from scheme. Policy: auditor signs off needs_review when a file is missing.",
+    "input": "Audit the recommendation.",
+    "expected_output": "{\"signoff\":\"needs_review\",\"cfo_one_liner\":\"Missing scheme settlement for CAP00216, recover 18450.\"}",
+    "retrieval_context": [
+      "CAP00216 leakage 18450 recover"
+    ]
+  }
+]
