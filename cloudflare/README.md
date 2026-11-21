@@ -4,6 +4,11 @@ Public Workers Free app with a React frontend and a Hono Worker. Runtime data is
 
 The landing page is an **Executive summary** for leadership (KPIs, waterfall, trend, top drivers, heatmap, recovery funnel, printable brief). Domain pages share one template. Palette: navy / slate, one blue accent, semantic red/amber/green for status only. Inter, 8px spacing, shadcn/Radix components.
 
+Lifecycle now also covers **Merchant Settlement** (gross-to-net batches),
+**Merchant Funding** (NEFT/RTGS/IMPS, SLA and account checks) and
+**Acquirer / Sponsor** (volumes, fee pass-through, statement recon), with
+dedicated Settlement, Funding and Acquirer agents on the orchestrator roster.
+
 See `postgres/README.md` for apply steps. Do not bind D1. Hyperdrive is not used.
 
 # Cloudflare-native Revenue Assurance

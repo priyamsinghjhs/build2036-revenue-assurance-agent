@@ -16,6 +16,7 @@ import { chartMargin, TruncTick, WrappedLegend } from "@/components/ChartKit";
 import { ExceptionTable } from "@/components/ExceptionTable";
 import { KpiCard } from "@/components/KpiCard";
 import { StatusBar } from "@/components/StatusBar";
+import { DomainCharts } from "@/components/DomainCharts";
 import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,6 +41,9 @@ const ROUTE_TO_AREA: Record<string, string> = {
   vendors: "vendor",
   gl: "gl",
   hops: "hops",
+  settlement: "settlement",
+  funding: "funding",
+  acquirer: "acquirer",
 };
 
 const FEE_AREAS = ["gateway", "network", "partner"] as const;
@@ -155,6 +159,9 @@ function AreaChartBlock({ series }: { series: { type: string; points: Record<str
   const raw = series.points ?? [];
   if (!raw.length) return <p className="text-sm text-slate-500">No series</p>;
   const type = series.type;
+  if (type === "settlement" || type === "funding" || type === "acquirer") {
+    return <DomainCharts type={type} points={raw} />;
+  }
   const cssPoints =
     type === "fees"
       ? raw.flatMap((row) => [

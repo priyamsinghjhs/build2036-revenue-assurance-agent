@@ -14,6 +14,7 @@ import {
 } from "./recon";
 import type { Env } from "./types";
 import { getDb, type AppDb } from "./pg";
+import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 
 const JSON_HINT = "Reply with compact JSON only. No markdown fences, no prose outside JSON.";
 
@@ -91,6 +92,9 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
       recon_cash: ["cash_ar"],
       recon_vendor: ["vendor"],
       recon_gl: ["gl"],
+      recon_settlement: ["settlement"],
+      recon_funding: ["funding"],
+      recon_acquirer: ["acquirer"],
     };
     const areas = map[agentId] ?? (domain ? [domain as AreaId] : []);
     const summaries = [];
@@ -136,9 +140,12 @@ export function systemPrompt(agentId: AgentId): string {
     recon_cash: reconSchema("cash_ar"),
     recon_vendor: reconSchema("vendor"),
     recon_gl: reconSchema("gl"),
+    recon_settlement: reconSchema("settlement"),
+    recon_funding: reconSchema("funding"),
+    recon_acquirer: reconSchema("acquirer"),
     gap_detection: `{"severity":"critical|high|medium|low","themes":["short theme"],"priority_gaps":[{"exception_id":"","issue":"","amount":0,"priority":"high|medium|low"}],"narrative":"one sentence"}`,
-    investigator: `{"root_cause":"short","evidence":["chip"],"affected":"who/what","confidence":0}`,
-    action: `{"actions":[{"type":"dispute|recover|rebill|escalate|adjust|mark_known","target":"ref or merchant","amount":0,"currency":"INR","confidence":0,"rationale":"short"}]}`,
+    investigator: `{"root_cause":"short","evidence":["chip"],"affected":"who/what","confidence":80}` /* confidence is an integer 0-100 */,
+    action: `{"actions":[{"type":"dispute|recover|rebill|escalate|adjust|mark_known","target":"ref or merchant","amount":0,"currency":"INR","confidence":80,"rationale":"short"}]}`,
     auditor: `{"signoff":"ready|needs_review","compliance_notes":"short","audit_points":["point"],"cfo_one_liner":"one sentence"}`,
   };
   return [
@@ -146,6 +153,7 @@ export function systemPrompt(agentId: AgentId): string {
     meta?.role ?? "",
     "SQL has already computed matches, variances and leakage. Only interpret the provided summaries.",
     "Data is synthetic, for demo only. Be concise.",
+    "confidence is an integer 0-100, not a 0-1 fraction. amounts are plain numbers (no currency symbols or words).",
     JSON_HINT,
     `Schema: ${schemas[agentId]}`,
   ].join("\n");
@@ -171,6 +179,7 @@ export async function runAgentStep(
   } catch {
     output = { raw, parse_error: true };
   }
+  output = sanitizeAgentOutput(output);
   const outputId = crypto.randomUUID();
   const created = new Date().toISOString();
   await getDb(env).prepare(
@@ -191,9 +200,9 @@ export async function runAgentStep(
           opts.runId,
           opts.exceptionId ?? null,
           String(act.type ?? "escalate"),
-          Number(act.amount ?? 0),
+          normalizeAmount(act.amount),
           String(act.currency ?? "INR"),
-          Number(act.confidence ?? 0),
+          normalizeConfidence(act.confidence),
           String(act.rationale ?? ""),
           created,
         )
@@ -254,4 +263,26 @@ export async function listActions(db: AppDb, limit = 50) {
     .bind(limit)
     .all();
   return results ?? [];
+}
+
+function sanitizeAgentOutput(output: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...output };
+  if (next.confidence !== undefined) next.confidence = normalizeConfidence(next.confidence);
+  const actionRows = Array.isArray(next.actions) ? (next.actions as Record<string, unknown>[]) : null;
+  if (actionRows) {
+    next.actions = actionRows.map((act) => ({
+      ...act,
+      amount: act.amount !== undefined ? normalizeAmount(act.amount) : act.amount,
+      confidence: act.confidence !== undefined ? normalizeConfidence(act.confidence) : act.confidence,
+    }));
+  }
+  for (const key of ["top_gaps", "priority_gaps"] as const) {
+    const rows = Array.isArray(next[key]) ? (next[key] as Record<string, unknown>[]) : null;
+    if (!rows) continue;
+    next[key] = rows.map((row) => ({
+      ...row,
+      amount: row.amount !== undefined ? normalizeAmount(row.amount) : row.amount,
+    }));
+  }
+  return next;
 }

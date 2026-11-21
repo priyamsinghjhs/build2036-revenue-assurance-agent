@@ -12,6 +12,7 @@ import { api, type ActionRow, type AutomationLog, type LatestRun, type Roster } 
 import { SeverityBadge, StatusDot } from "@/components/SeverityBadge";
 import { Button } from "@/components/ui/button";
 import { inr, prettyCat } from "@/lib/format";
+import { publicErrorMessage } from "../../shared/errors";
 
 const DOMAINS = [
   { id: "all", label: "Run all" },
@@ -28,6 +29,9 @@ const DOMAINS = [
   { id: "cash_ar", label: "Cash / AR" },
   { id: "vendor", label: "Vendor costs" },
   { id: "gl", label: "GL / ERP" },
+  { id: "settlement", label: "Settlement" },
+  { id: "funding", label: "Funding" },
+  { id: "acquirer", label: "Acquirer" },
 ];
 
 type StepStatus = "idle" | "running" | "done" | "cached" | "error";
@@ -67,7 +71,7 @@ export default function AgentsPage() {
     api
       .roster()
       .then(setRoster)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => setError(publicErrorMessage(e, "Couldn't load agents. Please refresh.")));
     loadCached("all").catch(() => undefined);
     api.automationLatest().then((r) => setAutoLog(r.latest)).catch(() => undefined);
   }, [loadCached]);
@@ -86,7 +90,7 @@ export default function AgentsPage() {
       setActions(act.actions);
       setAutoLog(auto.latest);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(publicErrorMessage(e));
     } finally {
       setAutoBusy(false);
     }
@@ -137,7 +141,7 @@ export default function AgentsPage() {
         actions: act.actions.filter((a) => a.run_id === started.run_id),
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(publicErrorMessage(e));
     } finally {
       setBusy(false);
     }

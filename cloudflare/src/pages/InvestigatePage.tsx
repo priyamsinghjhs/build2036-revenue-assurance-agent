@@ -5,6 +5,8 @@ import { api, type ExceptionRow } from "@/api";
 import { ExceptionTable } from "@/components/ExceptionTable";
 import { SeverityBadge } from "@/components/SeverityBadge";
 import { inr, prettyCat } from "@/lib/format";
+import { publicErrorMessage } from "../../shared/errors";
+import { normalizeAmount, normalizeConfidence } from "../../shared/numbers";
 
 const STEPS = ["investigator", "action", "auditor"] as const;
 
@@ -36,7 +38,7 @@ export default function InvestigatePage() {
     api
       .exception(exceptionId)
       .then((r) => setRow(r.exception))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => setError(publicErrorMessage(e, "Couldn't load this exception. Please try another.")));
   }, [exceptionId]);
 
   async function run() {
@@ -62,7 +64,7 @@ export default function InvestigatePage() {
       await api.complete(started.run_id);
       setStep("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(publicErrorMessage(e, "The investigation could not be completed. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -135,20 +137,20 @@ export default function InvestigatePage() {
 }
 
 function VisualOutput({ id, output }: { id: string; output: Record<string, unknown> }) {
-  const conf = typeof output.confidence === "number" ? Number(output.confidence) : null;
+  const conf = output.confidence != null && output.confidence !== "" ? normalizeConfidence(output.confidence) : null;
   return (
-    <div className="mt-3 space-y-2 text-xs text-slate-300">
+    <div className="mt-3 space-y-2 text-xs text-slate-600">
       {id === "investigator" && (
         <>
-          <div className="text-sm text-white">{String(output.root_cause || output.summary || "")}</div>
+          <div className="text-sm text-ink">{String(output.root_cause || output.summary || "")}</div>
           {conf != null && (
             <div>
               <div className="mb-1 flex justify-between text-[11px] text-muted">
                 <span>Confidence</span>
-                <span>{Math.round(conf * 100)}%</span>
+                <span>{conf}%</span>
               </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
-                <div className="h-full rounded-full bg-cyan-400" style={{ width: `${Math.round(conf * 100)}%` }} />
+              <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+                <div className="h-full rounded-full bg-accent" style={{ width: `${conf}%` }} />
               </div>
             </div>
           )}
@@ -169,7 +171,7 @@ function VisualOutput({ id, output }: { id: string; output: Record<string, unkno
             return (
               <li key={i}>
                 <span className="font-semibold uppercase text-cyan-300">{String(row.action ?? row.type ?? "act")}</span>
-                {row.amount != null ? <span className="ml-2 text-danger">{inr(Number(row.amount), true)}</span> : null}
+                {row.amount != null ? <span className="ml-2 text-danger">{inr(normalizeAmount(row.amount), true)}</span> : null}
                 {row.rationale ? <div className="text-muted">{String(row.rationale)}</div> : null}
               </li>
             );

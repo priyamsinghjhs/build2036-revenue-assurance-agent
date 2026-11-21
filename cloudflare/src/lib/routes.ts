@@ -18,6 +18,9 @@ export function areaPath(area: string): string {
     vendor: "/vendors",
     gl: "/gl",
     hops: "/hops",
+    settlement: "/settlement",
+    funding: "/funding",
+    acquirer: "/acquirer",
   };
   return map[area] ?? "/";
 }
@@ -41,6 +44,9 @@ export const TITLES: Record<string, string> = {
   "/vendors": "Vendor costs",
   "/gl": "GL / ERP",
   "/hops": "System hops",
+  "/settlement": "Merchant settlement",
+  "/funding": "Merchant funding",
+  "/acquirer": "Acquirer / sponsor",
   "/agents": "Agents & actions",
   "/investigate": "Investigate",
 };
