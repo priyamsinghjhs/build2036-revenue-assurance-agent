@@ -1,0 +1,43 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "revenue-assurance-agent",
+  "account_id": "95f96d50618b771a8c58542029828a1a",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-11-21",
+  "workers_dev": true,
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "LLM_PROVIDER": "cloudflare",
+    "CLOUDFLARE_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "CF_ACCOUNT_ID": "95f96d50618b771a8c58542029828a1a"
+  },
+  "containers": [
+    {
+      "class_name": "RevenueAssuranceContainer",
+      "scheduling_policy": "durable_object",
+      "max_instances": 2,
+      "images": {
+        "base": {
+          "dockerfile": "./Dockerfile"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REVENUE_ASSURANCE",
+        "class_name": "RevenueAssuranceContainer"
+      }
+    ]
+  },
+  "exports": {
+    "RevenueAssuranceContainer": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
+}
