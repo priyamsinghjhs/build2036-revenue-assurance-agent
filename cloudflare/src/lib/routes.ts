@@ -21,6 +21,15 @@ export function areaPath(area: string): string {
     settlement: "/settlement",
     funding: "/funding",
     acquirer: "/acquirer",
+    config: "/config",
+    tax: "/tax",
+    kyc: "/kyc",
+    interfaces: "/interfaces",
+    aml: "/aml",
+    network_risk: "/network-risk",
+    success: "/success",
+    controls: "/controls",
+    trace: "/trace",
   };
   return map[area] ?? "/";
 }
@@ -47,6 +56,15 @@ export const TITLES: Record<string, string> = {
   "/settlement": "Merchant settlement",
   "/funding": "Merchant funding",
   "/acquirer": "Acquirer / sponsor",
+  "/controls": "Control library",
+  "/config": "Config & rule changes",
+  "/tax": "Tax & regulatory",
+  "/kyc": "KYC & profile",
+  "/interfaces": "Interface drops",
+  "/aml": "AML / fraud flags",
+  "/network-risk": "Network risk",
+  "/success": "Payment success rate",
+  "/trace": "Transaction trace",
   "/agents": "Agents & actions",
   "/investigate": "Investigate",
 };

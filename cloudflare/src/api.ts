@@ -50,6 +50,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ status, note }),
     }),
+  controls: () => request<ControlsPayload>("/api/controls"),
+  trace: (q: string) => request<TraceResult>(`/api/trace?q=${encodeURIComponent(q)}`),
+  networkRisk: () => request<NetworkRiskPayload>("/api/network-risk"),
 };
 
 export type FilterOptions = {
@@ -89,6 +92,80 @@ export type Executive = {
   heatmap: { area: string; label: string; match_rate: number; leakage: number; exceptions: number }[];
   funnel: { stage: string; amount: number; n: number }[];
   narrative: { bullets: string[]; source: string; generated_at: string | null } | null;
+  governance: GovernanceKpis | null;
+};
+
+export type GovernanceKpis = {
+  controls_total: number;
+  controls_pass: number;
+  controls_fail: number;
+  coverage_pct: number;
+  unapproved_changes: number;
+  unapproved_impact: number;
+  tax_leakage: number;
+  kyc_open: number;
+  kyc_at_risk: number;
+  aml_flags: number;
+  aml_exposure: number;
+  interface_drop_pct: number;
+  success_rate: number;
+};
+
+export type ControlRow = {
+  control_id: string;
+  name: string;
+  objective: string;
+  domain: string;
+  owner: string;
+  frequency: string;
+  threshold: string;
+  last_run: string | null;
+  status: string | null;
+  exception_count: number;
+  leakage: number;
+  trend: string | null;
+  coverage: number | null;
+};
+
+export type ControlsPayload = {
+  synthetic: boolean;
+  controls: ControlRow[];
+  by_domain: { domain: string; n: number; passing: number; failing: number; leakage: number }[];
+  kpis: GovernanceKpis | null;
+};
+
+export type TraceStep = {
+  hop: string;
+  ts: string | null;
+  ref: string;
+  status: string;
+  amount: number | null;
+  detail: string;
+};
+
+export type TraceResult = {
+  query: string;
+  resolved: { kind: string; id: string; merchant_id: string | null } | null;
+  steps: TraceStep[];
+};
+
+export type NetworkNode = {
+  id: string;
+  kind: string;
+  label: string;
+  merchant_id: string | null;
+  risk_score: number;
+  is_known_bad: number;
+};
+
+export type NetworkEdge = { id: string; src: string; dst: string; rel: string; weight: number };
+
+export type NetworkRiskPayload = {
+  synthetic: boolean;
+  note: string;
+  nodes: NetworkNode[];
+  edges: NetworkEdge[];
+  proximity: { entity_id: string; dist: number }[];
 };
 
 export type SystemMap = {

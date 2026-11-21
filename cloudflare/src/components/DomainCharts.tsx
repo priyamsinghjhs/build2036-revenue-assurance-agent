@@ -40,6 +40,12 @@ export function DomainCharts({ type, points }: { type: string; points: Point[] }
   if (type === "settlement") return <SettlementCharts points={points} />;
   if (type === "funding") return <FundingCharts points={points} />;
   if (type === "acquirer") return <AcquirerCharts points={points} />;
+  if (type === "config") return <ConfigCharts points={points} />;
+  if (type === "tax") return <TaxCharts points={points} />;
+  if (type === "kyc") return <KycCharts points={points} />;
+  if (type === "interfaces") return <InterfaceCharts points={points} />;
+  if (type === "aml") return <SimpleNamed points={points} title="AML / fraud exposure by pattern" />;
+  if (type === "success") return <SuccessCharts points={points} />;
   return null;
 }
 
@@ -236,6 +242,217 @@ function AcquirerCharts({ points }: { points: Point[] }) {
                   tone={num(r.passthrough_invoiced) - num(r.passthrough_expected) > 0.5 ? "danger" : "accent"}
                 />
               </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function ConfigCharts({ points }: { points: Point[] }) {
+  const rows = points.filter((p) => p.kind === "change" || p.name);
+  const max = Math.max(...rows.map((r) => num(r.value)), 1);
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted">Revenue impact since each change. Unapproved changes are highlighted.</p>
+      {rows.map((r) => (
+        <BarRow
+          key={String(r.name)}
+          name={`${r.name}${Number(r.approved) === 1 ? "" : " · unapproved"}`}
+          value={num(r.value)}
+          max={max}
+          tone={Number(r.approved) === 1 ? "ok" : "danger"}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TaxCharts({ points }: { points: Point[] }) {
+  const gst = points.filter((p) => p.kind === "gst");
+  const tds = points.filter((p) => p.kind === "tds");
+  const max = Math.max(...points.map((p) => Math.max(num(p.expected), num(p.actual), num(p.statutory))), 1);
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <div>
+        <h3 className="mb-3 text-sm font-medium text-ink">GST on invoices vs 18% statutory</h3>
+        <div className="space-y-3">
+          {gst.map((r) => (
+            <div key={String(r.name)} className="space-y-1">
+              <div className="truncate text-xs font-medium text-ink" title={String(r.name)}>{String(r.name)}</div>
+              <BarRow name="Statutory 18%" value={num(r.statutory ?? r.expected)} max={max} tone="ink" />
+              <BarRow name="Charged" value={num(r.actual)} max={max} tone={Math.abs(num(r.actual) - num(r.statutory ?? r.expected)) > 0.5 ? "danger" : "ok"} />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div>
+        <h3 className="mb-3 text-sm font-medium text-ink">TDS on partner commission (illustrative 5%)</h3>
+        <div className="space-y-3">
+          {tds.map((r) => (
+            <div key={String(r.name)} className="space-y-1">
+              <div className="truncate text-xs font-medium text-ink">{String(r.name)}</div>
+              <BarRow name="Expected TDS" value={num(r.expected)} max={max} tone="ink" />
+              <BarRow name="Withheld" value={num(r.actual)} max={max} tone={num(r.actual) + 0.5 < num(r.expected) ? "danger" : "ok"} />
+            </div>
+          ))}
+        </div>
+        <p className="mt-4 text-xs text-muted">Zero MDR on RuPay debit / UPI P2M is labelled illustrative and listed in the exceptions table.</p>
+      </div>
+    </div>
+  );
+}
+
+function KycCharts({ points }: { points: Point[] }) {
+  const status = points.filter((p) => p.kind === "status");
+  const tier = points.filter((p) => p.kind === "tier");
+  const max = Math.max(...points.map((p) => num(p.n)), 1);
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <div>
+        <h3 className="mb-3 text-sm font-medium text-ink">KYC status</h3>
+        <div className="space-y-2">
+          {status.map((r) => (
+            <BarRow key={String(r.name)} name={String(r.name)} value={num(r.n)} max={max} tone={String(r.name) === "active" ? "ok" : "danger"} suffix={String(num(r.n))} />
+          ))}
+        </div>
+      </div>
+      <div>
+        <h3 className="mb-3 text-sm font-medium text-ink">Risk tier</h3>
+        <div className="space-y-2">
+          {tier.map((r) => (
+            <BarRow key={String(r.name)} name={String(r.name)} value={num(r.n)} max={max} tone={String(r.name) === "high" ? "danger" : "accent"} suffix={String(num(r.n))} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InterfaceCharts({ points }: { points: Point[] }) {
+  const hops = ["gateway", "switch", "clearing", "settlement", "bank", "gl"];
+  const totals = hops.map((hop) => {
+    const rows = points.filter((p) => p.hop === hop);
+    return {
+      hop,
+      n: rows.reduce((s, r) => s + num(r.n), 0),
+      volume: rows.reduce((s, r) => s + num(r.volume), 0),
+      drop_n: rows.reduce((s, r) => s + num(r.drop_n), 0),
+    };
+  });
+  const max = Math.max(...totals.map((t) => t.volume), 1);
+  const days = Array.from(new Set(points.map((p) => String(p.day)))).sort();
+  const peak = days
+    .map((day) => ({ day, volume: points.filter((p) => p.day === day && p.hop === "gateway").reduce((s, r) => s + num(r.volume), 0) }))
+    .sort((a, b) => b.volume - a.volume)[0];
+  const funnel = hops.map((hop) => {
+    const row = points.find((p) => p.day === peak?.day && p.hop === hop);
+    return { hop, n: num(row?.n), volume: num(row?.volume) };
+  });
+  const fmax = Math.max(...funnel.map((f) => f.volume), 1);
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <div>
+        <h3 className="mb-3 text-sm font-medium text-ink">Book totals by hop</h3>
+        <div className="space-y-2">
+          {totals.map((t) => (
+            <BarRow
+              key={t.hop}
+              name={`${t.hop}${t.drop_n ? ` · ${t.drop_n} drops` : ""}`}
+              value={t.volume}
+              max={max}
+              tone={t.drop_n ? "warn" : "accent"}
+            />
+          ))}
+        </div>
+      </div>
+      <div>
+        <h3 className="mb-3 text-sm font-medium text-ink">Daily funnel · {peak?.day ?? "—"}</h3>
+        <p className="mb-3 text-xs text-muted">Highest-volume gateway day in the October book, then the same calendar day at later hops (clearing and settlement may land on a later value date).</p>
+        <div className="space-y-2">
+          {funnel.map((f) => (
+            <BarRow key={f.hop} name={`${f.hop} · ${f.n} msgs`} value={f.volume} max={fmax} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SimpleNamed({ points, title }: { points: Point[]; title: string }) {
+  const max = Math.max(...points.map((p) => num(p.value)), 1);
+  return (
+    <div>
+      <h3 className="mb-3 text-sm font-medium text-ink">{title}</h3>
+      <div className="space-y-2">
+        {points.map((p) => (
+          <BarRow key={String(p.name)} name={`${p.name} · ${num(p.n)}`} value={num(p.value)} max={max} tone="danger" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SuccessCharts({ points }: { points: Point[] }) {
+  const channel = points.filter((p) => p.kind === "channel");
+  const acquirer = points.filter((p) => p.kind === "acquirer");
+  const reason = points.filter((p) => p.kind === "reason");
+  const emi = points.filter((p) => p.kind === "emi");
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div>
+          <h3 className="mb-3 text-sm font-medium text-ink">Approval rate by channel</h3>
+          <div className="space-y-2">
+            {channel.map((r) => (
+              <BarRow
+                key={String(r.name)}
+                name={`${r.name} · ${num(r.approved)}/${num(r.n)}`}
+                value={num(r.rate)}
+                max={1}
+                tone={num(r.rate) < 0.85 ? "danger" : "ok"}
+                suffix={pct(num(r.rate))}
+              />
+            ))}
+          </div>
+        </div>
+        <div>
+          <h3 className="mb-3 text-sm font-medium text-ink">Approval rate by acquirer</h3>
+          <div className="space-y-2">
+            {acquirer.map((r) => (
+              <BarRow
+                key={String(r.name)}
+                name={`${r.name} · ${num(r.approved)}/${num(r.n)}`}
+                value={num(r.rate)}
+                max={1}
+                tone={num(r.rate) < 0.85 ? "danger" : "ok"}
+                suffix={pct(num(r.rate))}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div>
+          <h3 className="mb-3 text-sm font-medium text-ink">Decline reasons</h3>
+          <div className="space-y-2">
+            {reason.map((r) => (
+              <BarRow key={String(r.name)} name={String(r.name)} value={num(r.n)} max={Math.max(...reason.map((x) => num(x.n)), 1)} tone="warn" suffix={String(num(r.n))} />
+            ))}
+          </div>
+        </div>
+        <div>
+          <h3 className="mb-3 text-sm font-medium text-ink">EMI vs non-EMI (card)</h3>
+          <div className="space-y-2">
+            {emi.map((r) => (
+              <BarRow
+                key={String(r.name)}
+                name={`${r.name} · ${num(r.n)} txns`}
+                value={num(r.volume)}
+                max={Math.max(...emi.map((x) => num(x.volume)), 1)}
+              />
             ))}
           </div>
         </div>

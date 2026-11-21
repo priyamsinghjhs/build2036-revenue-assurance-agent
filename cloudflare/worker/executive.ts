@@ -25,6 +25,21 @@ export type ExecPayload = {
   heatmap: { area: string; label: string; match_rate: number; leakage: number; exceptions: number }[];
   funnel: { stage: string; amount: number; n: number }[];
   narrative: { bullets: string[]; source: string; generated_at: string | null } | null;
+  governance: {
+    controls_total: number;
+    controls_pass: number;
+    controls_fail: number;
+    coverage_pct: number;
+    unapproved_changes: number;
+    unapproved_impact: number;
+    tax_leakage: number;
+    kyc_open: number;
+    kyc_at_risk: number;
+    aml_flags: number;
+    aml_exposure: number;
+    interface_drop_pct: number;
+    success_rate: number;
+  } | null;
 };
 
 export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
@@ -117,6 +132,8 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
     .map((bucket) => ageingRaw?.find((r) => r.bucket === bucket) ?? { bucket, n: 0, leakage: 0 })
     .filter((r) => r.n > 0 || r.bucket !== "unknown");
 
+  const gov = await db.prepare("SELECT * FROM ra_governance_kpi WHERE id = 1").first<Record<string, unknown>>();
+
   let bullets: string[] = [];
   if (brief?.bullets) {
     bullets = Array.isArray(brief.bullets) ? (brief.bullets as string[]) : [];
@@ -157,6 +174,23 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
     funnel,
     narrative: brief
       ? { bullets, source: brief.source, generated_at: brief.generated_at }
+      : null,
+    governance: gov
+      ? {
+          controls_total: Number(gov.controls_total ?? 0),
+          controls_pass: Number(gov.controls_pass ?? 0),
+          controls_fail: Number(gov.controls_fail ?? 0),
+          coverage_pct: Number(gov.coverage_pct ?? 0),
+          unapproved_changes: Number(gov.unapproved_changes ?? 0),
+          unapproved_impact: Number(gov.unapproved_impact ?? 0),
+          tax_leakage: Number(gov.tax_leakage ?? 0),
+          kyc_open: Number(gov.kyc_open ?? 0),
+          kyc_at_risk: Number(gov.kyc_at_risk ?? 0),
+          aml_flags: Number(gov.aml_flags ?? 0),
+          aml_exposure: Number(gov.aml_exposure ?? 0),
+          interface_drop_pct: Number(gov.interface_drop_pct ?? 0),
+          success_rate: Number(gov.success_rate ?? 0),
+        }
       : null,
   };
 }
