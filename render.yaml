@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: revenue-assurance-agent
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: LLM_PROVIDER
+        value: cloudflare
+      - key: CLOUDFLARE_MODEL
+        value: "@cf/google/gemma-4-26b-a4b-it"
+      - key: CF_ACCOUNT_ID
+        sync: false
+      - key: CF_AI_API_TOKEN
+        sync: false

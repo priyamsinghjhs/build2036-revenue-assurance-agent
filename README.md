@@ -4,7 +4,7 @@
 
 A fully open-source, multi-agent system that performs first-pass revenue assurance investigations for Treasury and Finance teams. Agents autonomously detect anomalies, investigate root causes, synthesize evidence, recommend actions, and generate CFO-ready audit trails.
 
-**Zero cloud credits required.** Runs entirely locally with DuckDB + Ollama + LangGraph.
+**Zero cloud credits required for local use.** Runs entirely locally with DuckDB + Ollama + LangGraph, or deploy the Streamlit app on Render with Cloudflare Workers AI.
 
 ## Agents
 
@@ -35,13 +35,29 @@ python src/data/init_db.py
 streamlit run app.py
 ```
 
+`LLM_PROVIDER` defaults to `ollama`. The app also creates `data/revenue_assurance.db` on startup if it is missing.
+
+## Deploy
+
+Host the Streamlit app on Render's free web service and call Cloudflare Workers AI for the LLM.
+
+1. In the Cloudflare dashboard, create a Workers AI API token and copy your account ID.
+2. Connect this repo as a Render Blueprint (`render.yaml`) or as a Python web service. The Blueprint uses:
+   - **Build:** `pip install -r requirements.txt`
+   - **Start:** `streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false`
+   - **Health check:** `/_stcore/health`
+3. When prompted, set `CF_ACCOUNT_ID` and `CF_AI_API_TOKEN`. `LLM_PROVIDER` is already set to `cloudflare`, and `CLOUDFLARE_MODEL` defaults to `@cf/google/gemma-4-26b-a4b-it` (free-tier, tool-calling).
+4. After the deploy succeeds, open the `*.onrender.com` URL.
+
+The free instance sleeps after 15 minutes of inactivity, so the first visit after a break can take about a minute. Render's ephemeral disk does not persist the DuckDB file; the app rebuilds the synthetic database on startup.
+
 ## Architecture
 
 ```
 Streamlit UI → LangGraph Multi-Agent Flow
                 ├─ DuckDB (settlements, fees, transactions)
-                ├─ Ollama (local LLM)
-                └─ Chroma (RAG on contracts)
+                ├─ Ollama (local LLM) or Cloudflare Workers AI
+                └─ Keyword retrieval over fee-policy documents
 ```
 
 ## Why This Fits BUILD 2036
@@ -55,16 +71,17 @@ Streamlit UI → LangGraph Multi-Agent Flow
 ## Tech Stack (All Open Source)
 
 - **Data**: DuckDB
-- **LLM**: Ollama (Llama 3.1 / Qwen2.5 / Mistral)
+- **LLM**: Ollama (Llama 3.1) locally, or Cloudflare Workers AI (Gemma 4) in production
 - **Orchestration**: LangGraph
-- **RAG**: Chroma + LlamaIndex-style retrieval
+- **RAG**: Keyword retrieval over fee schedules (upgradeable to a vector store)
 - **UI**: Streamlit
-- **Anomaly**: pandas + scikit-learn statistical checks
+- **Anomaly**: pandas + DuckDB settlement checks, with LLM classification
 
 ## Project Structure
 
 ```
 ├── app.py                      # Streamlit demo
+├── render.yaml                 # Render Blueprint (free web service)
 ├── src/
 │   ├── agents/                 # All 5 agents
 │   ├── tools/                  # DuckDB + RAG tools

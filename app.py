@@ -1,14 +1,15 @@
 """Streamlit demo for Agentic Revenue Assurance Copilot."""
 import streamlit as st
 import duckdb
-from pathlib import Path
+from src.data.init_db import DB_PATH, init_db
 from src.graph import graph
 
 st.set_page_config(page_title="Revenue Assurance Agent", layout="wide")
 st.title("Agentic Revenue Assurance Copilot")
 st.caption("BUILD 2036 — Applied AI & Agentic Intelligence | Open-source multi-agent system")
 
-DB_PATH = Path("data/revenue_assurance.db")
+if not DB_PATH.exists():
+    init_db()
 
 # Load settlements for selection
 if DB_PATH.exists():
@@ -68,7 +69,7 @@ st.sidebar.markdown("""
 
 ### Stack
 - DuckDB
-- Ollama (local LLM)
+- Ollama (local) or Cloudflare Workers AI
 - LangGraph
 - Streamlit
 """)
