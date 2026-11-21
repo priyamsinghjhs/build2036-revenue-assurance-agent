@@ -42,3 +42,9 @@ python evals/rejected_to_goldens.py path/to/rejected.json
 ```
 
 Each row should include `agent`, `context`, `input`, and optionally `expected_output` and `comment`.
+
+## GitHub Actions
+
+The intended workflow lives at `.github/workflows/evals.yml` (a copy is kept in `evals/github-actions-evals.yml`). It runs on pull requests and skips cleanly when `CF_ACCOUNT_ID` and `CF_AI_API_TOKEN` are not set. Do not store those secrets in the repo; a maintainer must add them in the repository settings.
+
+The first v7 push could not include `.github/workflows/evals.yml` because the `priyamsinghjhs` GitHub token used for the push does not have the `workflow` scope. To enable CI, copy `evals/github-actions-evals.yml` to `.github/workflows/evals.yml` and push with a token that has the `workflow` scope.
