@@ -1,0 +1,11 @@
+{
+  "name": "build2036-revenue-assurance-agent",
+  "account_id": "95f96d50618b771a8c58542029828a1a",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-21",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true
+  }
+}
