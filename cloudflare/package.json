@@ -12,10 +12,14 @@
     "cf-typecheck": "tsc -p tsconfig.worker.json --noEmit"
   },
   "dependencies": {
+    "@xyflow/react": "^13.0.2",
     "hono": "^4.10.0",
+    "lucide-react": "^1.77.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.18.6",
+    "recharts": "^3.11.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.0",

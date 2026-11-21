@@ -13,3 +13,6 @@ interface D1Database {
 interface Fetcher {
   fetch(request: Request | string, init?: RequestInit): Promise<Response>;
 }
+
+interface Crypto { randomUUID(): string; }
+declare const crypto: Crypto;
