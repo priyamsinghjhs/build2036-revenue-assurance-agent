@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""Offline / CI DeepEval suite for the Revenue Assurance agents.
+"""Offline / local DeepEval suite for the Revenue Assurance agents.
 
 Uses Workers AI (OpenAI-compatible) as both the model-under-test and the judge.
+No OpenAI, no Confident AI cloud, no GitHub Actions required.
+
 Required environment:
   CF_ACCOUNT_ID
-  CF_AI_API_TOKEN
+  CF_AI_API_TOKEN   (preferred; must have Workers AI permission)
+  or CLOUDFLARE_API_TOKEN as a fallback
 
-The GitHub Actions workflow skips this script when those secrets are absent.
+Optional:
+  EVAL_RESULTS_DIR     where to write JSON + markdown (default: stdout only)
+  CF_EVAL_MODEL        default @cf/meta/llama-4-scout-17b-16e-instruct
+  CF_EVAL_MAX_TOKENS   default 256
+  CF_EVAL_NEURON_BUDGET default 4000 (leave headroom under the 10k/day free cap)
+
 Do not print tokens.
 """
 
@@ -15,9 +23,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections import defaultdict
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 GOLDENS = Path(__file__).resolve().parent / "goldens"
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
 
 def secrets_present() -> bool:
@@ -35,77 +46,224 @@ def load_goldens():
 
 def main() -> int:
     if not secrets_present():
-        print("Skipping DeepEval — CF_ACCOUNT_ID / CF_AI_API_TOKEN are not set.")
+        print("Skipping DeepEval — CF_ACCOUNT_ID and CF_AI_API_TOKEN (or CLOUDFLARE_API_TOKEN) are not set.")
         return 0
 
-    from deepeval import evaluate
+    # Telemetry / Confident AI off (also set in run_local.sh).
+    os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "YES")
+    os.environ.setdefault("DEEPEVAL_TELEMETRY_ENABLED", "0")
+    os.environ.setdefault("CONFIDENT_OPEN_BROWSER", "0")
+    os.environ.setdefault("CONFIDENT_TRACE_FLUSH", "NO")
+
     from deepeval.metrics import (
         AnswerRelevancyMetric,
         FaithfulnessMetric,
         HallucinationMetric,
+        ContextualPrecisionMetric,
+        ContextualRecallMetric,
     )
-    try:
-        from deepeval.metrics import ContextualPrecisionMetric, ContextualRecallMetric
-    except ImportError:  # older DeepEval
-        ContextualPrecisionMetric = ContextualRecallMetric = None  # type: ignore
     from deepeval.test_case import LLMTestCase
 
-    from cf_model import WorkersAIModel, workers_ai_complete
+    from cf_model import USAGE, NeuronBudgetExceeded, WorkersAIModel, workers_ai_complete
 
-    model = WorkersAIModel()
-    judge = WorkersAIModel()  # same free Workers AI model as judge
+    judge = WorkersAIModel()
+    metric_kwargs = dict(
+        model=judge,
+        include_reason=False,
+        async_mode=False,
+        verbose_mode=False,
+    )
     metrics_std = [
-        FaithfulnessMetric(model=judge, threshold=0.6, include_reason=False),
-        HallucinationMetric(model=judge, threshold=0.6, include_reason=False),
-        AnswerRelevancyMetric(model=judge, threshold=0.5, include_reason=False),
+        ("Faithfulness", FaithfulnessMetric(threshold=0.6, **metric_kwargs)),
+        ("Hallucination", HallucinationMetric(threshold=0.6, **metric_kwargs)),
+        ("AnswerRelevancy", AnswerRelevancyMetric(threshold=0.5, **metric_kwargs)),
     ]
-    metrics_rag = list(metrics_std)
-    if ContextualPrecisionMetric and ContextualRecallMetric:
-        metrics_rag.extend(
-            [
-                ContextualRecallMetric(model=judge, threshold=0.5, include_reason=False),
-                ContextualPrecisionMetric(model=judge, threshold=0.5, include_reason=False),
-            ]
-        )
+    metrics_rag = metrics_std + [
+        ("ContextualRecall", ContextualRecallMetric(threshold=0.5, **metric_kwargs)),
+        ("ContextualPrecision", ContextualPrecisionMetric(threshold=0.5, **metric_kwargs)),
+    ]
 
-    cases = []
+    results = []
+    fatal = 0
+    quality_fail = 0
+
     for agent, row in load_goldens():
         ctx = row.get("retrieval_context") or [row.get("context", "")]
+        name = row.get("name") or "unnamed"
+        entry = {
+            "agent": agent,
+            "name": name,
+            "input": row["input"],
+            "expected_output": row.get("expected_output"),
+            "actual_output": None,
+            "metrics": [],
+            "error": None,
+        }
         try:
             actual = workers_ai_complete(
                 f"You are the {agent} agent. Answer only from the context. "
-                f"If a fact is missing, say 'insufficient data'.\n\n"
+                f"If a fact is missing, say 'insufficient data'. Keep the answer short.\n\n"
                 f"CONTEXT:\n{row['context']}\n\nQUESTION:\n{row['input']}\n"
             )
+            entry["actual_output"] = actual
+        except NeuronBudgetExceeded as exc:
+            entry["error"] = str(exc)
+            results.append(entry)
+            print(f"BUDGET {agent}/{name}: {exc}")
+            break
         except Exception as exc:  # noqa: BLE001
-            print(f"MODEL_ERROR {agent}/{row['name']}: {exc}")
-            return 1
-        cases.append(
-            (
-                agent,
-                LLMTestCase(
-                    input=row["input"],
-                    actual_output=actual,
-                    expected_output=row.get("expected_output"),
-                    context=ctx if agent != "contracts_rag" else None,
-                    retrieval_context=ctx,
-                ),
-                metrics_rag if agent == "contracts_rag" else metrics_std,
-            )
-        )
+            fatal += 1
+            entry["error"] = f"MODEL_ERROR: {exc}"
+            results.append(entry)
+            print(f"MODEL_ERROR {agent}/{name}: {exc}")
+            continue
 
-    failed = 0
-    for agent, case, metrics in cases:
-        try:
-            evaluate(test_cases=[case], metrics=metrics)
-            print(f"OK {agent}/{getattr(case, 'input', '')[:40]}")
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            print(f"FAIL {agent}: {exc}")
-    print(f"DONE failed={failed} total={len(cases)}")
-    # CI should not block the PR on a soft quality miss in this first cut;
-    # report failures but exit 0 unless the model/API itself failed earlier.
-    return 0
+        case = LLMTestCase(
+            input=row["input"],
+            actual_output=actual,
+            expected_output=row.get("expected_output"),
+            context=list(ctx),
+            retrieval_context=list(ctx),
+        )
+        bundle = metrics_rag if agent == "contracts_rag" else metrics_std
+        case_fail = False
+        for metric_name, metric in bundle:
+            rec = {"name": metric_name, "threshold": metric.threshold, "score": None, "success": None, "error": None}
+            try:
+                metric.measure(case, _show_indicator=False)
+                rec["score"] = None if metric.score is None else float(metric.score)
+                rec["success"] = bool(metric.success) if metric.success is not None else None
+                if metric.error:
+                    rec["error"] = str(metric.error)
+                    case_fail = True
+                elif rec["success"] is False:
+                    case_fail = True
+            except NeuronBudgetExceeded as exc:
+                rec["error"] = str(exc)
+                case_fail = True
+                entry["metrics"].append(rec)
+                results.append(entry)
+                print(f"BUDGET {agent}/{name}/{metric_name}: {exc}")
+                # stop the run
+                _write_results(results, quality_fail + 1, fatal, incomplete=True)
+                return 1
+            except Exception as exc:  # noqa: BLE001
+                rec["error"] = str(exc)
+                case_fail = True
+            entry["metrics"].append(rec)
+            status = "PASS" if rec["success"] else ("ERROR" if rec["error"] else "FAIL")
+            print(f"  {status} {agent}/{name}/{metric_name} score={rec['score']} threshold={rec['threshold']}")
+        if case_fail:
+            quality_fail += 1
+        results.append(entry)
+
+    out = _write_results(results, quality_fail, fatal, incomplete=False)
+    print(f"DONE quality_fail={quality_fail} api_fail={fatal} total={len(results)} neurons={USAGE.neurons:.2f}")
+    if out:
+        print(f"RESULTS {out}")
+    # Soft quality misses do not fail the process; API/budget issues do.
+    return 1 if fatal else 0
+
+
+def _write_results(results, quality_fail, fatal, incomplete: bool):
+    from cf_model import USAGE
+
+    now = datetime.now(IST)
+    by_agent: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    for row in results:
+        for m in row["metrics"]:
+            if m["score"] is not None:
+                by_agent[row["agent"]][m["name"]].append(m)
+
+    summary = {}
+    for agent, metrics in by_agent.items():
+        summary[agent] = {}
+        for name, recs in metrics.items():
+            scores = [r["score"] for r in recs]
+            summary[agent][name] = {
+                "n": len(scores),
+                "mean": round(sum(scores) / len(scores), 4) if scores else None,
+                "scores": scores,
+                "passes": sum(1 for r in recs if r["success"]),
+                "fails": sum(1 for r in recs if r["success"] is False),
+                "errors": sum(1 for r in recs if r["error"]),
+                "threshold": recs[0]["threshold"] if recs else None,
+            }
+
+    payload = {
+        "generated_at": now.strftime("%Y-%m-%d %I:%M %p IST"),
+        "incomplete": incomplete,
+        "quality_fail": quality_fail,
+        "api_fail": fatal,
+        "cases": len(results),
+        "usage": USAGE.as_dict(),
+        "note": (
+            "DeepEval 4.x scores Faithfulness, Hallucination, AnswerRelevancy, "
+            "ContextualRecall and ContextualPrecision as higher-is-better fractions. "
+            "Hallucination is the share of claims judged supported (not a raw hallucination rate). "
+            "Workers AI is the model-under-test and the judge. No OpenAI or Confident AI was used."
+        ),
+        "summary": summary,
+        "results": results,
+    }
+
+    out_dir = os.environ.get("EVAL_RESULTS_DIR")
+    if not out_dir:
+        print(json.dumps({k: payload[k] for k in ("generated_at", "usage", "summary", "quality_fail", "api_fail")}, indent=2))
+        return None
+
+    dest = Path(out_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "results.json").write_text(json.dumps(payload, indent=2))
+    (dest / "RESULTS.md").write_text(_markdown(payload))
+    return str(dest)
+
+
+def _markdown(payload: dict) -> str:
+    u = payload["usage"]
+    lines = [
+        "# Local DeepEval results",
+        "",
+        f"Generated: {payload['generated_at']}",
+        "",
+        "## Usage (Workers AI free neurons)",
+        "",
+        f"- Model: `{u['model']}`",
+        f"- Calls: {u['calls']}",
+        f"- Tokens: {u['prompt_tokens']} prompt + {u['completion_tokens']} completion",
+        f"- Neurons: **{u['neurons']}** / budget {u['neuron_budget']} (daily free cap is 10,000)",
+        f"- API errors: {u['errors']}",
+        f"- Cases: {payload['cases']}; quality misses: {payload['quality_fail']}; API failures: {payload['api_fail']}",
+        "",
+        payload["note"],
+        "",
+        "## Scores by agent",
+        "",
+        "| Agent | Metric | Mean | Passes | Fails | Errors | Threshold |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for agent, metrics in payload["summary"].items():
+        for name, rec in metrics.items():
+            mean = "—" if rec["mean"] is None else f"{rec['mean']:.3f}"
+            lines.append(
+                f"| {agent} | {name} | {mean} | {rec['passes']} | {rec['fails']} | {rec['errors']} | {rec['threshold']} |"
+            )
+    lines += ["", "## Per-case detail", ""]
+    for row in payload["results"]:
+        lines.append(f"### {row['agent']} / {row['name']}")
+        if row.get("error"):
+            lines.append(f"- Error: {row['error']}")
+        if row.get("actual_output"):
+            out = row["actual_output"].replace("\n", " ").strip()
+            if len(out) > 400:
+                out = out[:400] + "…"
+            lines.append(f"- Actual output: {out}")
+        for m in row["metrics"]:
+            status = "PASS" if m["success"] else ("ERROR" if m["error"] else "FAIL")
+            extra = f" error={m['error']}" if m["error"] else ""
+            lines.append(f"- {m['name']}: {status} score={m['score']} threshold={m['threshold']}{extra}")
+        lines.append("")
+    return "\n".join(lines) + "\n"
 
 
 if __name__ == "__main__":

@@ -11,6 +11,26 @@ The suite calls the Workers AI OpenAI-compatible endpoint and therefore needs:
 
 These must be added by a human as GitHub Actions secrets (or in your local environment). **Do not commit tokens.** The workflow skips cleanly when the secrets are absent.
 
+
+## Local free run (recommended)
+
+Run the suite on a machine that already has a Workers AI token. This does **not** use GitHub Actions, OpenAI, or Confident AI, and it stays on the Workers Free neuron allocation (10,000/day).
+
+```bash
+python3 -m venv /workspace/deepeval-venv
+/workspace/deepeval-venv/bin/pip install -r evals/requirements.txt
+export CF_ACCOUNT_ID=...          # npx wrangler whoami
+export CF_AI_API_TOKEN=...        # API token with Workers AI permission
+# Optional: CF_EVAL_MAX_TOKENS=256 CF_EVAL_NEURON_BUDGET=4000
+evals/run_local.sh
+```
+
+Results are written to `/workspace/evals-results/<date>/` as `results.json` and `RESULTS.md`. The script also runs `rejected_to_goldens.py` into that folder only (it does not change `evals/goldens/`).
+
+Telemetry is disabled (`DEEPEVAL_TELEMETRY_OPT_OUT=YES`). The judge and the model-under-test are both Workers AI (`@cf/meta/llama-4-scout-17b-16e-instruct` by default) through `cf_model.py`. `max_tokens` defaults to 256 and the run stops if estimated neurons would exceed `CF_EVAL_NEURON_BUDGET` (default 4,000), leaving headroom under the 10,000/day cap for the live app.
+
+**Token note:** a Wrangler `CLOUDFLARE_API_TOKEN` (used to deploy) may not have Workers AI permission and will return HTTP 401 on `ai/v1/chat/completions`. Use a token that includes Workers AI (`CF_AI_API_TOKEN`). Do not commit tokens.
+
 ## Local run
 
 ```bash
