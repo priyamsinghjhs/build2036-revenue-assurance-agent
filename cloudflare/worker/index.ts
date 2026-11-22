@@ -41,6 +41,7 @@ import {
   runRoutingSim, simulateRule, submitReview, updateCase, testRule, ruleTests, evalQuality,
 } from "./intel";
 import { listIngestion, persistIngestion } from "./ingest";
+import { decideAuditorSuggestion, listSuggestionDecisions, type AuditSuggestion } from "./auditor";
 import { publicErrorMessage } from "../shared/errors";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -373,6 +374,35 @@ app.post("/api/cases/:id", async (c) => {
     comment: body.comment ? String(body.comment) : undefined,
     actor: body.actor ? String(body.actor) : undefined,
   }));
+});
+app.get("/api/audit/suggestions", async (c) => {
+  const ex = String(c.req.query("exception_id") || "");
+  if (!ex) return c.json({ error: "exception_id is required" }, 400);
+  return c.json({ decisions: await listSuggestionDecisions(getDb(c.env), ex) });
+});
+app.post("/api/audit/suggestions", async (c) => {
+  const body = await readJson(c);
+  const decision = String(body.decision || "");
+  if (decision !== "accepted" && decision !== "dismissed") {
+    return c.json({ error: "decision must be accepted or dismissed" }, 400);
+  }
+  const suggestion = (body.suggestion || {}) as AuditSuggestion;
+  if (!body.exception_id || !suggestion.suggestion_id) {
+    return c.json({ error: "exception_id and suggestion.suggestion_id are required" }, 400);
+  }
+  try {
+    const result = await decideAuditorSuggestion(getDb(c.env), {
+      exception_id: String(body.exception_id),
+      suggestion,
+      decision,
+      comment: body.comment ? String(body.comment) : undefined,
+      reviewer: body.reviewer ? String(body.reviewer) : undefined,
+      run_id: body.run_id ? String(body.run_id) : undefined,
+    });
+    return c.json(result);
+  } catch (err) {
+    return c.json({ error: publicErrorMessage(err, "Could not record the suggestion decision.") }, 400);
+  }
 });
 app.get("/api/reviews", async (c) => c.json(await listReviews(getDb(c.env))));
 app.get("/api/reviews/:id", async (c) => {

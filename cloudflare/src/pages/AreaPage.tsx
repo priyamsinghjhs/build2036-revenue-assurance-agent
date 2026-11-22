@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import {
   Bar,
   BarChart,
+  LabelList,
   CartesianGrid,
   Line,
   LineChart,
@@ -12,7 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { api, type AreaDetail, type ExceptionRow } from "@/api";
-import { chartMargin, TruncTick, WrappedLegend } from "@/components/ChartKit";
+import { CategoryTick, chartMargin, TruncTick, WrappedLegend } from "@/components/ChartKit";
 import { ExceptionTable } from "@/components/ExceptionTable";
 import { KpiCard } from "@/components/KpiCard";
 import { StatusBar } from "@/components/StatusBar";
@@ -217,38 +218,46 @@ function AreaChartBlock({ series }: { series: { type: string; points: Record<str
   const longCats = isBar && (xKey === "scheme" || xKey === "name" || raw.length > 8);
   const Chart = isBar ? BarChart : LineChart;
   const colors = ["#1d4ed8", "#0f172a", "#64748b", "#b91c1c"];
-  const height = longCats ? Math.max(280, raw.length * 36) : 320;
-  const xInterval = raw.length <= 8 ? 0 : Math.max(1, Math.ceil(raw.length / 5) - 1);
+  const height = longCats ? Math.max(280, raw.length * 52) : 320;
+  const chartData = raw.map((row) =>
+    xKey === "day" ? row : { ...row, [xKey]: prettyCat(String((row as Record<string, unknown>)[xKey] ?? "")) },
+  );
   return (
     <div style={{ height }} className="min-h-72 w-full">
       <ResponsiveContainer width="100%" height="100%">
         <Chart
-          data={raw}
+          data={chartData}
           layout={longCats ? "vertical" : "horizontal"}
-          margin={{ ...chartMargin, left: longCats ? 12 : 8, bottom: longCats ? 8 : 48 }}
+          margin={{ ...chartMargin, left: longCats ? 8 : 8, right: isBar ? 56 : 16, bottom: longCats ? 8 : 48 }}
         >
           <CartesianGrid stroke="#1e293b" vertical={!longCats} horizontal={longCats ? false : true} />
           {longCats ? (
             <>
               <XAxis type="number" tick={<TruncTick maxChars={8} formatter={(v: unknown) => (type === "fx" ? String(v) : inr(Number(v), true))} />} />
-              <YAxis type="category" dataKey={xKey} width={88} interval={0} tick={<TruncTick textAnchor="end" maxChars={11} />} />
+              <YAxis type="category" dataKey={xKey} width={136} interval={0} tick={<CategoryTick textAnchor="end" maxCharsPerLine={16} />} />
             </>
           ) : (
             <>
               <XAxis
                 dataKey={xKey}
-                interval={xInterval}
+                interval={0}
                 height={48}
-                tick={<TruncTick angle={-35} textAnchor="end" maxChars={8} />}
+                tick={xKey === "day"
+                  ? <TruncTick angle={-35} textAnchor="end" maxChars={10} formatter={(d: unknown) => String(d ?? "").slice(5)} />
+                  : <CategoryTick textAnchor="middle" maxCharsPerLine={10} />}
               />
               <YAxis width={56} tick={<TruncTick textAnchor="end" maxChars={8} formatter={(v: unknown) => (type === "fx" ? String(v) : inr(Number(v), true))} />} />
             </>
           )}
-          <Tooltip contentStyle={tooltipStyle} />
+          <Tooltip contentStyle={tooltipStyle} labelFormatter={(label) => String(label)} />
           {yKeys.length > 1 ? <WrappedLegend /> : null}
           {yKeys.map((k, i) =>
             isBar ? (
-              <Bar key={k} dataKey={k} fill={colors[i % colors.length]} radius={longCats ? [0, 4, 4, 0] : [4, 4, 0, 0]} />
+              <Bar key={k} dataKey={k} fill={colors[i % colors.length]} radius={longCats ? [0, 4, 4, 0] : [4, 4, 0, 0]}>
+                {yKeys.length === 1 ? (
+                  <LabelList dataKey={k} position={longCats ? "right" : "top"} formatter={(v: unknown) => inr(Number(v), true)} style={{ fontSize: 10, fill: "#e2e8f0" }} />
+                ) : null}
+              </Bar>
             ) : (
               <Line key={k} type="monotone" dataKey={k} stroke={colors[i % colors.length]} dot={false} />
             ),

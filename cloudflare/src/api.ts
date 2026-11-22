@@ -109,7 +109,7 @@ export const api = {
     return [...(r.pending ?? []), ...(r.decided ?? [])].map(map);
   },
   review: async (id: string): Promise<ReviewDetail> => {
-    const r = await request<{ review: Record<string, unknown>; exception: Record<string, unknown> | null; case: Record<string, unknown> | null }>(
+    const r = await request<{ review: Record<string, unknown>; exception: Record<string, unknown> | null; case: Record<string, unknown> | null; suggestion_decisions?: SuggestionDecision[] }>(
       `/api/reviews/${encodeURIComponent(id)}`,
     );
     const rev = r.review ?? {};
@@ -127,14 +127,28 @@ export const api = {
         amount: Number(ex.leakage ?? act.amount ?? 0),
         facts: ex,
         case_id: r.case?.case_id ? String(r.case.case_id) : null,
-        auditor_status: String(aud.signoff ?? aud.status ?? "needs_review"),
+        auditor_status: String(aud.verdict ?? aud.signoff ?? aud.status ?? "needs_review"),
         review_status: String(rev.review_status ?? "pending"),
       },
       investigator: inv,
       action: act,
       auditor: aud,
+      suggestion_decisions: r.suggestion_decisions ?? [],
     };
   },
+  suggestionDecisions: (exceptionId: string) =>
+    request<{ decisions: SuggestionDecision[] }>(`/api/audit/suggestions?exception_id=${encodeURIComponent(exceptionId)}`),
+  decideSuggestion: (body: {
+    exception_id: string;
+    suggestion: AuditSuggestion;
+    decision: "accepted" | "dismissed";
+    comment?: string;
+    run_id?: string;
+  }) =>
+    request<{ decision_id?: string; action_id?: string | null; draft_id?: string | null; already?: boolean; decision?: string }>(
+      "/api/audit/suggestions",
+      { method: "POST", body: JSON.stringify({ ...body, reviewer: "Priyam Singh" }) },
+    ),
   submitReview: (
     id: string,
     body: { decision: "approved" | "rejected" | "reinvestigate"; comment: string; amount_override?: number },
@@ -500,6 +514,26 @@ export type ReviewDetail = {
   investigator: Record<string, unknown>;
   action: Record<string, unknown>;
   auditor: Record<string, unknown>;
+  suggestion_decisions: SuggestionDecision[];
+};
+
+export type AuditSuggestion = {
+  suggestion_id: string;
+  action: string;
+  title: string;
+  owner_team: string;
+  priority: string;
+  expected_recovery: number;
+  maps_to: string;
+  rationale: string;
+};
+
+export type SuggestionDecision = {
+  suggestion_id: string;
+  decision: string;
+  comment?: string | null;
+  action_id?: string | null;
+  draft_id?: string | null;
 };
 
 export type AskResult = {

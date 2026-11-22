@@ -6,6 +6,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,7 +14,7 @@ import {
 } from "recharts";
 import { Printer } from "lucide-react";
 import { api, type Executive } from "@/api";
-import { chartMargin, TruncTick } from "@/components/ChartKit";
+import { CategoryTick, chartMargin, TruncTick } from "@/components/ChartKit";
 import { KpiCard } from "@/components/KpiCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -291,7 +292,7 @@ export default function ExecutivePage() {
           <CardContent>
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={data.trend} margin={{ ...chartMargin, bottom: 36 }}>
+                <AreaChart data={data.trend} margin={{ ...chartMargin, left: 16, bottom: 44 }}>
                   <CartesianGrid stroke={CHART.grid} vertical={false} />
                   <XAxis dataKey="day" interval={Math.max(1, Math.ceil(data.trend.length / 5) - 1)} height={48} tick={<TruncTick angle={-35} textAnchor="end" maxChars={8} formatter={(d) => String(d ?? "").slice(5)} />} />
                   <YAxis width={56} tick={<TruncTick textAnchor="end" maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
@@ -311,14 +312,30 @@ export default function ExecutivePage() {
             <CardDescription>Five largest gap types in the book</CardDescription>
           </CardHeader>
           <CardContent>
-            <div style={{ height: Math.max(240, data.top_drivers.length * 44) }}>
+            <div style={{ height: Math.max(280, data.top_drivers.length * 56) }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data.top_drivers.map((d) => ({ ...d, name: prettyCat(d.category) }))} layout="vertical" margin={{ ...chartMargin, left: 8 }}>
+                <BarChart
+                  data={data.top_drivers.map((d) => ({ ...d, name: prettyCat(d.category) }))}
+                  layout="vertical"
+                  margin={{ ...chartMargin, left: 4, right: 64 }}
+                >
                   <CartesianGrid stroke={CHART.grid} horizontal={false} />
                   <XAxis type="number" tick={<TruncTick maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
-                  <YAxis type="category" dataKey="name" width={110} interval={0} tick={<TruncTick textAnchor="end" maxChars={16} />} />
-                  <Tooltip contentStyle={tooltipStyle} formatter={(v) => inr(Number(v), true)} />
-                  <Bar dataKey="leakage" fill={CHART.leak} radius={[0, 4, 4, 0]} name="Leakage" />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    width={136}
+                    interval={0}
+                    tick={<CategoryTick textAnchor="end" maxCharsPerLine={16} />}
+                  />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(v) => inr(Number(v), true)}
+                    labelFormatter={(label) => String(label)}
+                  />
+                  <Bar dataKey="leakage" fill={CHART.leak} radius={[0, 4, 4, 0]} name="Leakage">
+                    <LabelList dataKey="leakage" position="right" formatter={(v) => inr(Number(v), true)} style={{ fontSize: 10, fill: "#0f172a" }} />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Play, RefreshCw } from "lucide-react";
-import { api, type ExceptionRow } from "@/api";
+import { api, type ExceptionRow, type SuggestionDecision } from "@/api";
+import { AuditPanel } from "@/components/AuditPanel";
 import { ExceptionTable } from "@/components/ExceptionTable";
 import { SeverityBadge } from "@/components/SeverityBadge";
 import { inr, prettyCat } from "@/lib/format";
@@ -18,6 +19,7 @@ export default function InvestigatePage() {
   const [error, setError] = useState("");
   const [step, setStep] = useState<string>("");
   const [outputs, setOutputs] = useState<Record<string, Record<string, unknown>>>({});
+  const [decisions, setDecisions] = useState<SuggestionDecision[]>([]);
 
   useEffect(() => {
     api
@@ -50,6 +52,7 @@ export default function InvestigatePage() {
         setOutputs(next);
       })
       .catch(() => undefined);
+    api.suggestionDecisions(exceptionId).then((r) => setDecisions(r.decisions ?? [])).catch(() => undefined);
   }, [exceptionId]);
 
   async function run() {
@@ -141,6 +144,19 @@ export default function InvestigatePage() {
               );
             })}
           </ol>
+          {outputs.auditor && (
+            <section className="rounded-xl border border-line bg-white p-4">
+              <h2 className="mb-2 text-sm font-semibold text-ink">Auditor review</h2>
+              <AuditPanel
+                output={outputs.auditor}
+                exceptionId={row.exception_id}
+                decisions={decisions}
+                onDecided={() => {
+                  api.suggestionDecisions(row.exception_id).then((r) => setDecisions(r.decisions ?? [])).catch(() => undefined);
+                }}
+              />
+            </section>
+          )}
         </>
       )}
     </div>
@@ -195,10 +211,10 @@ function VisualOutput({ id, output, exceptionId }: { id: string; output: Record<
       {id === "auditor" && (
         <>
           {(() => {
-            const status = String(output.signoff ?? output.status ?? "");
+            const status = String(output.verdict ?? output.signoff ?? output.status ?? "");
             if (!status) return null;
             const badge = <SeverityBadge value={status} />;
-            if (status === "needs_review" && exceptionId) {
+            if ((status === "needs_review" || status === "rejected") && exceptionId) {
               return (
                 <Link to={`/review/${encodeURIComponent(exceptionId)}`} className="inline-flex" title="Open human review">
                   {badge}
@@ -210,7 +226,16 @@ function VisualOutput({ id, output, exceptionId }: { id: string; output: Record<
           {output.verification === "unverified" && (
             <p className="text-xs text-warning">Unverified — grounding check failed. Do not treat as fact.{exceptionId ? " " : ""}{exceptionId ? <Link to={`/review/${encodeURIComponent(exceptionId)}`} className="underline">Open review</Link> : null}</p>
           )}
-          {typeof output.cfo_one_liner === "string" && <p className="text-sm text-white">{output.cfo_one_liner}</p>}
+          {typeof output.cfo_one_liner === "string" && <p className="text-sm text-ink">{output.cfo_one_liner}</p>}
+          {Array.isArray(output.checks) && (
+            <div className="flex flex-wrap gap-1">
+              {(output.checks as { name: string; result: string }[]).map((c) => (
+                <span key={c.name} className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${c.result === "pass" ? "bg-emerald-50 text-success" : "bg-red-50 text-danger"}`}>
+                  {c.result === "pass" ? "Pass" : "Fail"}
+                </span>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>

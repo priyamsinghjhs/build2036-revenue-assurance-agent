@@ -5,6 +5,7 @@ import { startRun, runAgentStep, completeRun } from "./agentRunner";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import { networkRisk } from "./network";
 import { compileExpectedFeeExpr, persistAndRunTests, loadRuleTests, validateFeeExpression } from "./sqlRule";
+import { listSuggestionDecisions } from "./auditor";
 
 const ASK_VIEWS = [
   "v_ask_kpis",
@@ -461,7 +462,8 @@ export async function getReview(db: AppDb, id: string) {
     .prepare("SELECT c.* FROM ra_cases c JOIN ra_case_exceptions e ON e.case_id=c.case_id WHERE e.exception_id=? LIMIT 1")
     .bind(exId)
     .first<Record<string, unknown>>();
-  return { review: row, exception, case: linkedCase };
+  const suggestion_decisions = await listSuggestionDecisions(db, exId);
+  return { review: row, exception, case: linkedCase, suggestion_decisions };
 }
 
 export async function submitReview(

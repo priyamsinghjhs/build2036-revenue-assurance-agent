@@ -7,5 +7,14 @@
     "retrieval_context": [
       "v_ask_areas area leakage exception_count"
     ]
+  },
+  {
+    "name": "insufficient-data",
+    "context": "Allow-listed views: v_ask_areas (area, leakage). No merchant-level table is in scope.",
+    "input": "What is merchant MER999's mid-month settlement amount for January 2019?",
+    "expected_output": "insufficient data",
+    "retrieval_context": [
+      "Allow-listed views: v_ask_areas (area, leakage). No merchant-level table is in scope."
+    ]
   }
 ]

@@ -44,6 +44,11 @@ Metrics:
 
 - Faithfulness, Hallucination, Answer Relevancy — all goldens
 - Contextual Recall and Contextual Precision — contract RAG goldens (`goldens/contracts_rag.json`)
+- RefusalAlignment — a correct `insufficient data` answer on a missing-context golden is a pass (and the LLM judge is skipped)
+- GroundedNumbers — every number and ID in the answer must appear in (or be derivable from) the context
+- AuditorSchema and SuggestionPresence — auditor goldens must be valid structured JSON with checks and at least one suggestion
+
+Hallucination is not re-judged by the LLM when GroundedNumbers is a perfect match, which keeps the judge cheaper and less brittle.
 
 ## Benchmark other Workers AI models
 

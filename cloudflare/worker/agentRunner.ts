@@ -16,6 +16,7 @@ import type { Env } from "./types";
 import { getDb, type AppDb } from "./pg";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import { checkGrounding, retryPrompt } from "./grounding";
+import { AUDITOR_SCHEMA, finalizeAuditorOutput } from "./auditor";
 
 const JSON_HINT = "Reply with compact JSON only. No markdown fences, no prose outside JSON.";
 
@@ -167,8 +168,14 @@ export function systemPrompt(agentId: AgentId): string {
     gap_detection: `{"severity":"critical|high|medium|low","themes":["short theme"],"priority_gaps":[{"exception_id":"","issue":"","amount":0,"priority":"high|medium|low"}],"narrative":"one sentence"}`,
     investigator: `{"root_cause":"short","evidence":["chip"],"affected":"who/what","confidence":80}` /* confidence is an integer 0-100 */,
     action: `{"actions":[{"type":"dispute|recover|rebill|escalate|adjust|mark_known","target":"ref or merchant","amount":0,"currency":"INR","confidence":80,"rationale":"short"}]}`,
-    auditor: `{"signoff":"ready|needs_review","compliance_notes":"short","audit_points":["point"],"cfo_one_liner":"one sentence"}`,
+    auditor: AUDITOR_SCHEMA,
   };
+  const extra = agentId === "auditor" ? [
+    "You must audit and suggest, not only sign off.",
+    "Include all six checks (amount_reconciliation, evidence_completeness, policy_compliance, duplicate_prior_case, segregation_of_duties, grounding).",
+    "Suggestions are in-app proposals only: they may map to the Action Queue, an in-app dispute/data-request draft, or a case. Never send email or call an external API.",
+    "verdict is approved, needs_review, or rejected. Every number and ID must appear in INPUT.",
+  ] : [];
   return [
     `You are the ${meta?.name} agent for a payment-acquiring revenue assurance platform.`,
     meta?.role ?? "",
@@ -178,6 +185,7 @@ export function systemPrompt(agentId: AgentId): string {
     "confidence is an integer 0-100, not a 0-1 fraction. amounts are plain numbers (no currency symbols or words).",
     JSON_HINT,
     `Schema: ${schemas[agentId]}`,
+    ...extra,
   ].join("\n");
 }
 
@@ -200,13 +208,16 @@ export async function runAgentStep(
   const maxRetries = 2;
   let prompt = basePrompt;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const raw = await complete(env.AI, prompt);
+    const raw = await complete(env.AI, prompt, opts.agentId === "auditor" ? { json: true } : {});
     try {
       output = parseJson(raw);
     } catch {
       output = { raw, parse_error: true };
     }
     output = sanitizeAgentOutput(output);
+    if (opts.agentId === "auditor") {
+      output = finalizeAuditorOutput(output, input, briefPriors, checkGrounding(output, user));
+    }
     grounding = checkGrounding(output, user);
     if (grounding.passed) break;
     if (attempt === maxRetries) break;
@@ -219,9 +230,12 @@ export async function runAgentStep(
   if (!passed) {
     output.unsupported_claims = grounding.unsupported.map((c) => `${c.kind}:${c.value}`);
     if (opts.agentId === "auditor") {
+      output = finalizeAuditorOutput(output, input, briefPriors, grounding);
+      output.verdict = "needs_review";
       output.signoff = "needs_review";
       const reason = `Grounding check failed after ${retries} rework(s): ${(output.unsupported_claims as string[]).join(", ")}. Treat as unverified, not as fact.`;
       output.compliance_notes = `${String(output.compliance_notes ?? "")} ${reason}`.trim();
+      output.rationale = String(output.rationale ?? output.compliance_notes);
     }
   }
   const outputId = crypto.randomUUID();
@@ -268,14 +282,14 @@ export async function runAgentStep(
             opts.runId,
             "auditor",
             opts.domain ?? null,
-            JSON.stringify({
+            JSON.stringify(finalizeAuditorOutput({
+              verdict: "needs_review",
               signoff: "needs_review",
               compliance_notes: `Upstream ${opts.agentId} output marked unverified after grounding rework. Unsupported: ${(output.unsupported_claims as string[]).join(", ")}. Do not treat as fact.`,
-              audit_points: ["Grounding / faithfulness check failed"],
               cfo_one_liner: "An agent output could not be grounded in the SQL facts and needs human review.",
               verification: "unverified",
               faithfulness: output.faithfulness,
-            }),
+            }, input, briefPriors)),
             created,
           )
           .run();

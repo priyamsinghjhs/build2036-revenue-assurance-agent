@@ -4,6 +4,7 @@ import { api, type ReviewDetail } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { inr } from "@/lib/format";
+import { AuditPanel } from "@/components/AuditPanel";
 
 function asObj(v: unknown): Record<string, unknown> {
   if (!v) return {};
@@ -68,17 +69,24 @@ export default function ReviewPage() {
           <p>Investigate: <Link className="text-accent hover:underline" to={`/investigate/${encodeURIComponent(decoded)}`}>Open investigation</Link></p>
         </CardContent>
       </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Auditor review</CardTitle>
+          <CardDescription>Structured checks and proposed next steps. Accept creates an in-app Action Queue item; Dismiss requires a comment.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AuditPanel
+            output={aud}
+            exceptionId={decoded}
+            decisions={data.suggestion_decisions}
+            onDecided={() => void load()}
+          />
+        </CardContent>
+      </Card>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader><CardTitle>Evidence / SQL facts</CardTitle></CardHeader>
           <CardContent><pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md bg-slate-50 p-3 text-xs">{JSON.stringify(data.item.facts ?? inv.facts ?? inv.evidence ?? inv, null, 2)}</pre></CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>Auditor reasons</CardTitle></CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <p>Status: <span className="font-medium">{String(aud.status ?? data.item.auditor_status)}</span></p>
-            <p>{String(aud.reasons ?? aud.reason ?? aud.rationale ?? aud.summary ?? "—")}</p>
-          </CardContent>
         </Card>
         <Card>
           <CardHeader><CardTitle>Investigator</CardTitle></CardHeader>

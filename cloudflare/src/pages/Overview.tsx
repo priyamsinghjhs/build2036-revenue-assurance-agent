@@ -5,6 +5,7 @@ import {
   AreaChart,
   Bar,
   BarChart,
+  LabelList,
   CartesianGrid,
   Cell,
   ResponsiveContainer,
@@ -14,7 +15,7 @@ import {
 } from "recharts";
 import { AlertTriangle, IndianRupee, ShieldCheck, Store } from "lucide-react";
 import { api, type Overview as OverviewData } from "../api";
-import { chartMargin, TruncTick } from "../components/ChartKit";
+import { CategoryTick, chartMargin, TruncTick } from "../components/ChartKit";
 import { KpiCard } from "../components/KpiCard";
 import { MoneyFlow } from "../components/MoneyFlow";
 import { inr, pct, prettyCat } from "../lib/format";
@@ -96,7 +97,7 @@ export default function Overview() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">Leakage trend</h2>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data.trend} margin={{ ...chartMargin, bottom: 36 }}>
+              <AreaChart data={data.trend} margin={{ ...chartMargin, left: 16, bottom: 44 }}>
                 <CartesianGrid stroke="#1e293b" vertical={false} />
                 <XAxis dataKey="day" interval={0} height={48} tick={<TruncTick angle={-35} textAnchor="end" maxChars={8} formatter={(d) => String(d ?? "").slice(5)} />} />
                 <YAxis width={56} tick={<TruncTick textAnchor="end" maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
@@ -111,20 +112,22 @@ export default function Overview() {
         </section>
         <section className="rounded-2xl border border-white/10 bg-[#101827] p-4">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">By gap type</h2>
-          <div style={{ height: Math.max(288, cat.length * 28) }}>
+          <div style={{ height: Math.max(288, cat.length * 52) }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={cat} layout="vertical" margin={{ ...chartMargin, left: 8, right: 16 }}>
+              <BarChart data={cat} layout="vertical" margin={{ ...chartMargin, left: 4, right: 64 }}>
                 <CartesianGrid stroke="#1e293b" horizontal={false} />
                 <XAxis type="number" tick={<TruncTick maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
-                <YAxis type="category" dataKey="name" width={100} interval={0} tick={<TruncTick textAnchor="end" maxChars={14} />} />
+                <YAxis type="category" dataKey="name" width={136} interval={0} tick={<CategoryTick textAnchor="end" maxCharsPerLine={16} />} />
                 <Tooltip
                   contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}
                   formatter={(v) => inr(Number(v), true)}
+                  labelFormatter={(label) => String(label)}
                 />
                 <Bar dataKey="leakage" radius={[0, 6, 6, 0]}>
                   {cat.map((_, i) => (
                     <Cell key={i} fill={COLORS[i % COLORS.length]} />
                   ))}
+                  <LabelList dataKey="leakage" position="right" formatter={(v) => inr(Number(v), true)} style={{ fontSize: 10, fill: "#e2e8f0" }} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>

@@ -1,11 +1,28 @@
 import { MAX_TOKENS, MODEL, TEMPERATURE, type AiBinding } from "./types";
 
-export async function complete(ai: AiBinding, prompt: string): Promise<string> {
-  const result = await ai.run(MODEL, {
+export type CompleteOpts = { json?: boolean; max_tokens?: number };
+
+export async function complete(ai: AiBinding, prompt: string, opts: CompleteOpts = {}): Promise<string> {
+  const inputs: Record<string, unknown> = {
     messages: [{ role: "user", content: prompt }],
     temperature: TEMPERATURE,
-    max_tokens: MAX_TOKENS,
-  });
+    max_tokens: opts.max_tokens ?? MAX_TOKENS,
+  };
+  if (opts.json) {
+    inputs.response_format = { type: "json_object" };
+  }
+  let result: unknown;
+  try {
+    result = await ai.run(MODEL, inputs);
+  } catch (err) {
+    if (opts.json) {
+      // Some Workers AI accounts/models reject response_format; retry without it.
+      delete inputs.response_format;
+      result = await ai.run(MODEL, inputs);
+    } else {
+      throw err;
+    }
+  }
   const text = extractText(result);
   if (!text) {
     throw new Error(describeEmpty(result));

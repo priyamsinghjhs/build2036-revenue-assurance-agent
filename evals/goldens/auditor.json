@@ -1,11 +1,9 @@
 [
   {
-    "name": "needs-review-from-facts",
-    "context": "Investigator: missing scheme file CAP00216 leakage 18450. Action: recover 18450 INR from scheme. Policy: auditor signs off needs_review when a file is missing.",
-    "input": "Audit the recommendation.",
-    "expected_output": "{\"signoff\":\"needs_review\",\"cfo_one_liner\":\"Missing scheme settlement for CAP00216, recover 18450.\"}",
-    "retrieval_context": [
-      "CAP00216 leakage 18450 recover"
-    ]
+    "name": "structured-audit-cap00216",
+    "context": "Exception scheme:missing_scheme_settlement:CAP00216 merchant MER004 leakage 18450.00 expected 185000 actual 166550 category missing_scheme_settlement October 2026. Investigator: root cause is a missing scheme settlement file for CAP00216 at merchant MER004, leaving leakage of 18450.00. Action: recover 18450 INR from scheme. Policy: auditor signs off needs_review when a file is missing. Suggestions must be in-app only.",
+    "input": "Audit the recommendation and suggest concrete next steps. Reply with the structured auditor JSON schema only.",
+    "expected_output": "{\"verdict\":\"needs_review\",\"checks\":[{\"name\":\"amount_reconciliation\",\"result\":\"pass\",\"evidence\":\"CAP00216 expected 185000 actual 166550 leakage 18450.00\",\"source\":\"ra_exception_rows\"},{\"name\":\"evidence_completeness\",\"result\":\"fail\",\"evidence\":\"Missing scheme settlement file for CAP00216\",\"source\":\"file policy\"},{\"name\":\"policy_compliance\",\"result\":\"fail\",\"evidence\":\"Policy requires the scheme file before sign-off\",\"source\":\"file policy\"},{\"name\":\"duplicate_prior_case\",\"result\":\"pass\",\"evidence\":\"insufficient data on a prior case\",\"source\":\"ra_cases\"},{\"name\":\"segregation_of_duties\",\"result\":\"pass\",\"evidence\":\"Suggestions stay in-app pending human approval\",\"source\":\"approval policy\"},{\"name\":\"grounding\",\"result\":\"pass\",\"evidence\":\"All cited amounts and IDs are in the input\",\"source\":\"grounding check\"}],\"findings\":[{\"issue\":\"Missing scheme settlement file for CAP00216 at MER004\",\"severity\":\"high\",\"impact\":18450}],\"suggestions\":[{\"suggestion_id\":\"sug-1\",\"action\":\"request_file\",\"title\":\"Request the missing scheme settlement file for CAP00216\",\"owner_team\":\"Scheme\",\"priority\":\"high\",\"expected_recovery\":0,\"maps_to\":\"action_queue\",\"rationale\":\"File is missing\"},{\"suggestion_id\":\"sug-2\",\"action\":\"recover\",\"title\":\"Recover 18450 from MER004 for CAP00216\",\"owner_team\":\"Finance\",\"priority\":\"high\",\"expected_recovery\":18450,\"maps_to\":\"action_queue\",\"rationale\":\"Leakage 18450.00 from the facts\"}],\"confidence\":70,\"rationale\":\"Missing scheme file for CAP00216, leakage 18450.00, needs review.\",\"cfo_one_liner\":\"Missing scheme settlement for CAP00216 at MER004, recover 18450.\"}",
+    "retrieval_context": ["CAP00216 merchant MER004 leakage 18450.00 expected 185000 actual 166550 missing scheme settlement file"]
   }
 ]

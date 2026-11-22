@@ -24,8 +24,36 @@ export function pct(n: number, digits = 1): string {
   return `${(n * 100).toFixed(digits)}%`;
 }
 
+const ACRONYMS = new Set([
+  "AML", "KYC", "GST", "UPI", "MDR", "SLA", "TDS", "NPCI", "E2E", "FX", "GL",
+  "POS", "QR", "IMPS", "NEFT", "RTGS", "PPI", "P2M", "P2P", "NPA", "RBI",
+  "API", "IPM", "ACH", "NACH", "IMPS", "CBS", "MIS", "ATM", "EMI", "PAN",
+  "TIN", "MCC", "BIN", "ARN", "RRN", "STAN", "PCI", "SOC", "ISO",
+]);
+
+const CATEGORY_LABELS: Record<string, string> = {
+  aml_velocity_spike: "AML velocity spike",
+  aml_dormant_burst: "AML dormant burst",
+  aml_structuring: "AML structuring",
+  aml_round_trip: "AML round trip",
+  kyc_pending_transacting: "KYC pending transacting",
+  missing_scheme_settlement: "Missing scheme settlement",
+};
+
+/** Human-readable category: 'AML velocity spike', not 'aml_velocity_spike'. */
 export function prettyCat(s: string): string {
-  return s.replace(/_/g, " ");
+  if (!s) return s;
+  if (CATEGORY_LABELS[s]) return CATEGORY_LABELS[s];
+  return s
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((w) => {
+      const up = w.toUpperCase();
+      if (ACRONYMS.has(up)) return up;
+      const lower = w.toLowerCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
 }
 
 export const BOOK_AS_OF = "2026-11-21";
