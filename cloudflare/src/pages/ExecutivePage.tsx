@@ -344,6 +344,43 @@ export default function ExecutivePage() {
 
         <Card>
           <CardHeader>
+            <CardTitle>Compliance exposure</CardTitle>
+            <CardDescription>KYC, AML, network risk, interfaces, files and similar ops/risk amounts — not part of book leakage</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div style={{ height: Math.max(280, Math.max(data.compliance_exposure?.length ?? 0, 1) * 56) }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={(data.compliance_exposure ?? []).map((d) => ({ ...d, name: prettyCat(d.category), leakage: d.exposure }))}
+                  layout="vertical"
+                  margin={{ ...chartMargin, left: 4, right: 64 }}
+                >
+                  <CartesianGrid stroke={CHART.grid} horizontal={false} />
+                  <XAxis type="number" tick={<TruncTick maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    width={136}
+                    interval={0}
+                    tick={<CategoryTick textAnchor="end" maxCharsPerLine={16} />}
+                  />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(v) => inr(Number(v), true)}
+                    labelFormatter={(label) => String(label)}
+                  />
+                  <Bar dataKey="leakage" fill="#7c3aed" radius={[0, 4, 4, 0]} name="Exposure">
+                    <LabelList dataKey="leakage" position="right" formatter={(v) => inr(Number(v), true)} style={{ fontSize: 10, fill: "#0f172a" }} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+          <CardHeader>
             <CardTitle>Recovery pipeline</CardTitle>
             <CardDescription>From recoverable leakage through proposed, approved, recovered and write-off</CardDescription>
           </CardHeader>
@@ -369,7 +406,6 @@ export default function ExecutivePage() {
             </div>
           </CardContent>
         </Card>
-      </div>
 
       <Card>
         <CardHeader>

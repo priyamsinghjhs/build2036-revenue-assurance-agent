@@ -511,7 +511,10 @@ function optionalTrail(body: Record<string, unknown>): string[] {
 
 export type { AgentState, Env };
 async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-  ctx.waitUntil(runDailyAutomation(env, { force: false }).then(() => invalidateMem()));
+  // Await the work so a CPU/time limit cannot drop the job while the log still says 'running'.
+  const work = runDailyAutomation(env, { force: false }).then(() => invalidateMem());
+  ctx.waitUntil(work);
+  await work;
 }
 
 export default {

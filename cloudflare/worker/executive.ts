@@ -22,6 +22,7 @@ export type ExecPayload = {
   trend: { day: string; leakage: number; n: number }[];
   period_compare: { prior: number; current: number; delta: number };
   top_drivers: { area: string; category: string; n: number; leakage: number }[];
+  compliance_exposure: { area: string; category: string; n: number; exposure: number }[];
   heatmap: { area: string; label: string; match_rate: number; leakage: number; exceptions: number }[];
   funnel: { stage: string; amount: number; n: number }[];
   narrative: { bullets: string[]; source: string; generated_at: string | null } | null;
@@ -59,6 +60,10 @@ export type ExecPayload = {
 };
 
 
+/** Areas whose amounts are risk/ops exposure, not book leakage. */
+export const EXPOSURE_AREAS = ["aml", "network_risk", "kyc", "success", "interfaces", "anomalies", "files"] as const;
+export const BOOK_LEAKAGE_SQL = "area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')";
+
 export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
   const [kpi] = (
     await db.prepare("SELECT * FROM ra_kpi_summary WHERE id = 1").all<Record<string, unknown>>()
@@ -74,14 +79,20 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
   const [wo] = (
     await db.prepare("SELECT COALESCE(SUM(amount),0)::float AS written_off FROM ra_writeoffs").all<{ written_off: number }>()
   ).results ?? [];
-  const { results: areas } = await db
+  const { results: areasAll } = await db
     .prepare(
       "SELECT area, label, match_rate, leakage, exception_count AS exceptions FROM ra_area_summary ORDER BY leakage DESC",
     )
     .all<{ area: string; label: string; match_rate: number; leakage: number; exceptions: number }>();
+  const areas = (areasAll ?? []).filter((a) => !EXPOSURE_AREAS.includes(a.area as (typeof EXPOSURE_AREAS)[number]));
   const { results: cats } = await db
     .prepare(
-      "SELECT area, category, n, leakage FROM ra_leakage_category ORDER BY leakage DESC LIMIT 5",
+      `SELECT area, category, n, leakage FROM ra_leakage_category WHERE ${BOOK_LEAKAGE_SQL} ORDER BY leakage DESC LIMIT 5`,
+    )
+    .all<{ area: string; category: string; n: number; leakage: number }>();
+  const { results: exposureCats } = await db
+    .prepare(
+      `SELECT area, category, n, leakage FROM ra_leakage_category WHERE area IN ('aml','network_risk','kyc','success','interfaces','anomalies','files') ORDER BY leakage DESC LIMIT 5`,
     )
     .all<{ area: string; category: string; n: number; leakage: number }>();
   const { results: trend } = await db
@@ -100,6 +111,7 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
          END AS bucket,
          leakage
          FROM ra_exception_rows
+         WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
        ) a
        GROUP BY bucket`,
     )
@@ -188,7 +200,13 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
       n: Number(c.n),
       leakage: Number(c.leakage),
     })),
-    heatmap: (areas ?? []).map((a) => ({
+    compliance_exposure: (exposureCats ?? []).map((c) => ({
+      area: c.area,
+      category: c.category,
+      n: Number(c.n),
+      exposure: Number(c.leakage),
+    })),
+    heatmap: (areasAll ?? []).map((a) => ({
       area: a.area,
       label: a.label,
       match_rate: Number(a.match_rate),

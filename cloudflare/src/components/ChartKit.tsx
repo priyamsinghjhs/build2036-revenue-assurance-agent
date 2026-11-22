@@ -10,6 +10,13 @@ function tickText(
   return { raw, full };
 }
 
+/** Thin dense day axes so adjacent date labels do not overlap. Bar/category axes should keep interval={0}. */
+export function dayTickInterval(pointCount: number, widthHint = 1280): number {
+  const target = widthHint < 500 ? 4 : widthHint < 1100 ? 6 : 8;
+  if (pointCount <= target) return 0;
+  return Math.max(1, Math.ceil(pointCount / target) - 1);
+}
+
 /** SVG tick that truncates long labels and exposes the full value via <title> (tooltip). */
 export function TruncTick({
   x = 0,

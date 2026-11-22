@@ -13,7 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { api, type AreaDetail, type ExceptionRow } from "@/api";
-import { CategoryTick, chartMargin, TruncTick, WrappedLegend } from "@/components/ChartKit";
+import { CategoryTick, chartMargin, TruncTick, WrappedLegend, dayTickInterval } from "@/components/ChartKit";
 import { ExceptionTable } from "@/components/ExceptionTable";
 import { KpiCard } from "@/components/KpiCard";
 import { StatusBar } from "@/components/StatusBar";
@@ -240,7 +240,8 @@ function AreaChartBlock({ series }: { series: { type: string; points: Record<str
             <>
               <XAxis
                 dataKey={xKey}
-                interval={0}
+                interval={xKey === "day" ? dayTickInterval(raw.length) : 0}
+                minTickGap={xKey === "day" ? 12 : 0}
                 height={48}
                 tick={xKey === "day"
                   ? <TruncTick angle={-35} textAnchor="end" maxChars={10} formatter={(d: unknown) => String(d ?? "").slice(5)} />

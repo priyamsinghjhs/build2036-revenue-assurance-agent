@@ -218,6 +218,7 @@ export type Executive = {
   trend: { day: string; leakage: number; n: number }[];
   period_compare: { prior: number; current: number; delta: number };
   top_drivers: { area: string; category: string; n: number; leakage: number }[];
+  compliance_exposure?: { area: string; category: string; n: number; exposure: number }[];
   heatmap: { area: string; label: string; match_rate: number; leakage: number; exceptions: number }[];
   funnel: { stage: string; amount: number; n: number }[];
   narrative: { bullets: string[]; source: string; generated_at: string | null } | null;

@@ -1,5 +1,5 @@
 import { completeRun, runAgentStep, startRun } from "./agentRunner";
-import { executiveSummary, type ExecPayload } from "./executive";
+import { executiveSummary, EXPOSURE_AREAS, type ExecPayload } from "./executive";
 import { complete } from "./llm";
 import { getDb, type AppDb } from "./pg";
 import type { Env } from "./types";
@@ -21,7 +21,8 @@ function pct(n: number): string {
 export function deterministicBullets(exec: ExecPayload): string[] {
   const k = exec.kpis;
   const top = exec.top_drivers[0];
-  const worst = [...exec.heatmap].sort((a, b) => a.match_rate - b.match_rate)[0];
+  const bookHeat = exec.heatmap.filter((h) => !(EXPOSURE_AREAS as readonly string[]).includes(h.area));
+  const worst = [...bookHeat].sort((a, b) => a.match_rate - b.match_rate)[0];
   const ageing = exec.ageing.find((a) => a.bucket === "61+ days") ?? exec.ageing[exec.ageing.length - 1];
   const bullets = [
     `Gross acquiring volume of ${inr(k.revenue)} in ${exec.period.label} carried ${inr(k.leakage)} of leakage (${pct(k.leakage_pct)} of revenue) across ${k.exception_count} open exceptions.`,
@@ -142,6 +143,17 @@ export async function upsertNarrative(env: Env, exec: ExecPayload, force: boolea
   }
   let bullets = deterministicBullets(exec);
   let source: "llm" | "deterministic" = "deterministic";
+  if (!force) {
+    await db
+      .prepare(
+        `INSERT INTO ra_exec_brief (id, as_of, bullets, source, generated_at)
+         VALUES (1, ?, ?::jsonb, ?, now())
+         ON CONFLICT (id) DO UPDATE SET as_of = EXCLUDED.as_of, bullets = EXCLUDED.bullets, source = EXCLUDED.source, generated_at = now()`,
+      )
+      .bind(today, JSON.stringify(bullets), source)
+      .run();
+    return { skipped: false, source };
+  }
   try {
     const raw = await complete(
       env.AI,
@@ -198,10 +210,12 @@ export async function investigateTop(env: Env, runId: string) {
   return { skipped: false, exception_id: exceptionId, leakage: top.leakage, steps: outputs };
 }
 
-export async function runDailyAutomation(env: Env, opts: { force?: boolean } = {}) {
+export async function runDailyAutomation(env: Env, opts: { force?: boolean; skipLlm?: boolean } = {}) {
   const db = getDb(env);
   const logId = crypto.randomUUID();
   const started = new Date().toISOString();
+  const detail: Record<string, unknown> = {};
+  const skipLlm = opts.skipLlm === true || opts.force !== true;
   try {
     await db
       .prepare("INSERT INTO ra_automation_log (log_id, started_at, status, detail) VALUES (?, ?, 'running', '{}'::jsonb)")
@@ -210,36 +224,53 @@ export async function runDailyAutomation(env: Env, opts: { force?: boolean } = {
   } catch {
     // table might not exist yet on a stale deploy; continue
   }
-  const detail: Record<string, unknown> = {};
+  const finish = async (status: "completed" | "failed", extra: Record<string, unknown> = {}) => {
+    const payload = { ...detail, ...extra };
+    await db
+      .prepare("UPDATE ra_automation_log SET finished_at = ?, status = ?, detail = ?::jsonb WHERE log_id = ?")
+      .bind(new Date().toISOString(), status, JSON.stringify(payload), logId)
+      .run()
+      .catch(() => undefined);
+  };
   try {
     const run = await startRun(db, opts.force ? "automation:manual" : "automation:daily");
-    const exec = await executiveSummary(db);
-    detail.narrative = await upsertNarrative(env, exec, Boolean(opts.force));
-    detail.actions_seeded = await seedProposedActions(db, run.run_id);
     try {
-      const ev = await db
-        .prepare("SELECT event_id FROM ra_anomaly_events WHERE status='open' AND investigated_run IS NULL ORDER BY ABS(COALESCE(zscore,0)) DESC LIMIT 1")
-        .first<{ event_id: string }>();
-      if (ev) detail.investigation = await investigateAnomaly(env, ev.event_id);
-      else detail.investigation = await investigateTop(env, run.run_id);
+      await db.prepare("SELECT refresh_ra_summaries()").first();
+      detail.summaries_refreshed = true;
     } catch (err) {
-      detail.investigation_error = err instanceof Error ? err.message : String(err);
+      detail.summaries_refresh_error = err instanceof Error ? err.message : String(err);
+    }
+    const exec = await executiveSummary(db);
+    detail.executive_leakage = exec.kpis.leakage;
+    detail.executive_exceptions = exec.kpis.exception_count;
+    // Daily cron uses the deterministic brief so a Workers AI timeout cannot leave the job 'running'.
+    // A manual run (force) may still call the model, and falls back to deterministic bullets on error.
+    detail.narrative = await upsertNarrative(env, exec, Boolean(opts.force) && !skipLlm);
+    detail.actions_seeded = await seedProposedActions(db, run.run_id);
+    if (skipLlm) {
+      detail.investigation = { skipped: true, reason: "deterministic_cron", note: "Action proposals are seeded; investigator/auditor run when a human starts an investigation or a forced automation run." };
+    } else {
+      try {
+        const ev = await db
+          .prepare("SELECT event_id FROM ra_anomaly_events WHERE status='open' AND investigated_run IS NULL ORDER BY ABS(COALESCE(zscore,0)) DESC LIMIT 1")
+          .first<{ event_id: string }>();
+        const work = ev ? investigateAnomaly(env, ev.event_id) : investigateTop(env, run.run_id);
+        const timeout = new Promise((_, reject) => {
+          (globalThis as unknown as { setTimeout: (cb: () => void, ms: number) => void })
+            .setTimeout(() => reject(new Error("investigation_timeout")), 45_000);
+        });
+        detail.investigation = await Promise.race([work, timeout]);
+      } catch (err) {
+        detail.investigation_error = err instanceof Error ? err.message : String(err);
+      }
     }
     await completeRun(db, run.run_id);
     detail.run_id = run.run_id;
-    await db
-      .prepare("UPDATE ra_automation_log SET finished_at = ?, status = 'completed', detail = ?::jsonb WHERE log_id = ?")
-      .bind(new Date().toISOString(), JSON.stringify(detail), logId)
-      .run()
-      .catch(() => undefined);
+    await finish("completed");
     return { ok: true, log_id: logId, ...detail };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await db
-      .prepare("UPDATE ra_automation_log SET finished_at = ?, status = 'failed', detail = ?::jsonb WHERE log_id = ?")
-      .bind(new Date().toISOString(), JSON.stringify({ ...detail, error: message }), logId)
-      .run()
-      .catch(() => undefined);
+    await finish("failed", { error: message });
     return { ok: false, log_id: logId, error: message, ...detail };
   }
 }

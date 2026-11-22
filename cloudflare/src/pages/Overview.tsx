@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import { AlertTriangle, IndianRupee, ShieldCheck, Store } from "lucide-react";
 import { api, type Overview as OverviewData } from "../api";
-import { CategoryTick, chartMargin, TruncTick } from "../components/ChartKit";
+import { CategoryTick, chartMargin, TruncTick, dayTickInterval } from "../components/ChartKit";
 import { KpiCard } from "../components/KpiCard";
 import { MoneyFlow } from "../components/MoneyFlow";
 import { inr, pct, prettyCat } from "../lib/format";
@@ -99,7 +99,7 @@ export default function Overview() {
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={data.trend} margin={{ ...chartMargin, left: 16, bottom: 44 }}>
                 <CartesianGrid stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="day" interval={0} height={48} tick={<TruncTick angle={-35} textAnchor="end" maxChars={8} formatter={(d) => String(d ?? "").slice(5)} />} />
+                <XAxis dataKey="day" interval={dayTickInterval(data.trend.length)} minTickGap={12} height={48} tick={<TruncTick angle={-35} textAnchor="end" maxChars={8} formatter={(d) => String(d ?? "").slice(5)} />} />
                 <YAxis width={56} tick={<TruncTick textAnchor="end" maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
                 <Tooltip
                   contentStyle={{ background: "#0f172a", border: "1px solid #334155" }}

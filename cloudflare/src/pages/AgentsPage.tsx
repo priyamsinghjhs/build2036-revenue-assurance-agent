@@ -289,6 +289,9 @@ export default function AgentsPage() {
         </p>
       )}
       {runId && <p className="text-[11px] text-muted">Run {runId}</p>}
+      {latest?.run && (
+        <p className="text-[11px] text-muted">Cached run status: {String(latest.run.status ?? "known")}</p>
+      )}
 
       <section>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">Roster</h2>
@@ -336,9 +339,6 @@ export default function AgentsPage() {
           <ActionQueue rows={actions} onDecide={decide} />
         </section>
       </div>
-      {latest?.run && (
-        <p className="text-[11px] text-muted">Cached run status: {String(latest.run.status ?? "known")}</p>
-      )}
     </div>
   );
 }
