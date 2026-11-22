@@ -183,6 +183,12 @@ export function alignCfoToVerdict(out: AuditorOutput): AuditorOutput {
   return out;
 }
 
+export function resolveAuditorSource(raw: Record<string, unknown>, validShape: boolean): AuditorOutput["source"] {
+  const marked = String(raw.source ?? "");
+  if (marked === "deterministic" || marked === "skeleton" || raw.parse_error) return "deterministic";
+  return validShape ? "llm" : "deterministic";
+}
+
 export function isValidAuditorShape(raw: Record<string, unknown>): boolean {
   const verdict = mapVerdict(raw.verdict ?? raw.signoff);
   if (!verdict) return false;
@@ -274,7 +280,7 @@ export function normalizeAuditorOutput(raw: Record<string, unknown>, fallback?: 
     cfo_one_liner: cfo,
     compliance_notes: asStr(raw.compliance_notes, rationale),
     schema_valid: isValidAuditorShape(raw) && checks.length === 6,
-    source: isValidAuditorShape(raw) ? "llm" : "deterministic",
+    source: resolveAuditorSource(raw, isValidAuditorShape(raw)),
   };
   return alignCfoToVerdict(out);
 }
@@ -526,6 +532,7 @@ export function finalizeAuditorOutput(
   const skeleton = buildAuditorSkeleton(input, priors, grounding);
   const valid = isValidAuditorShape(raw) && !raw.parse_error;
   const out = valid ? normalizeAuditorOutput(raw, skeleton) : { ...skeleton, schema_valid: false, source: "deterministic" as const };
+  if (resolveAuditorSource(raw, valid) === "deterministic") out.source = "deterministic";
   if (grounding && !grounding.passed) {
     out.verdict = "needs_review";
     out.signoff = "needs_review";

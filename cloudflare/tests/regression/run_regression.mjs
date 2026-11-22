@@ -656,7 +656,10 @@ function chartAudit() {
     const y=collect(".recharts-yAxis-tick-labels"), x=collect(".recharts-xAxis-tick-labels");
     const mostly=(labs)=>labs.length>0&&labs.filter(isNum).length>=Math.ceil(labs.length*0.7);
     const cat=!mostly(y)&&y.length?y:!mostly(x)&&x.length?x:[];
-    out.push({ bars:rects.length, ticks:cat.length, ok:cat.length===rects.length });
+    const looksDay=cat.length>0&&cat.filter((s)=>/^\\d{2}-\\d{2}$/.test(s)||/^\\d{4}-\\d{2}-\\d{2}$/.test(s)).length>=Math.ceil(cat.length*0.7);
+    // Day axes use dayTickInterval so labels stay readable; category bars must still tick every bar.
+    const ok=looksDay?cat.length>=2&&cat.length<=rects.length:cat.length===rects.length;
+    out.push({ bars:rects.length, ticks:cat.length, ok, day:looksDay });
   }
   return out;
 }

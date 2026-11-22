@@ -141,6 +141,15 @@ const groundedFail = finalizeAuditorOutput(
 signOffOk(groundedFail, "finalizeAuditorOutput grounding-fail does not keep sign-off wording");
 check("grounding-fail verdict is needs_review", groundedFail.verdict === "needs_review");
 
+
+const kept = finalizeAuditorOutput(
+  { ...forced, parse_error: undefined, source: "deterministic" },
+  input,
+  priors,
+);
+check("finalize keeps source deterministic when marked", kept.source === "deterministic", String(kept.source));
+signOffOk(kept, "deterministic re-finalize CFO still matches verdict");
+
 if (failures) {
   console.error(`${failures} assertion(s) failed`);
   process.exit(1);
