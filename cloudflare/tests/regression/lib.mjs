@@ -21,14 +21,24 @@ export function db() {
 
 export async function api(path, opts = {}) {
   const t0 = Date.now();
-  const r = await fetch(BASE + path, {
-    ...opts,
-    headers: { "content-type": "application/json", ...(opts.headers || {}) },
-  });
-  const text = await r.text();
-  let body;
-  try { body = JSON.parse(text); } catch { body = { _raw: text.slice(0, 400) }; }
-  return { status: r.status, ok: r.ok, body, ms: Date.now() - t0, text: text.slice(0, 400) };
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(BASE + path, {
+        ...opts,
+        headers: { "content-type": "application/json", ...(opts.headers || {}) },
+        signal: AbortSignal.timeout(45_000),
+      });
+      const text = await r.text();
+      let body;
+      try { body = JSON.parse(text); } catch { body = { _raw: text.slice(0, 400) }; }
+      return { status: r.status, ok: r.ok, body, ms: Date.now() - t0, text: text.slice(0, 400) };
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 export function nearly(a, b, eps = 0.05) {

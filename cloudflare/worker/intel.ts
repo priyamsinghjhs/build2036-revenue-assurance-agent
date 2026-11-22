@@ -768,15 +768,31 @@ export function validateAskSql(sql: string): string {
   return limited;
 }
 
+const ASK_WRITE = /\b(insert|update|delete|drop|alter|create|grant|revoke|truncate|copy|vacuum|security)\b/i;
+
 export async function askData(env: Env, question: string) {
   const db = getDb(env);
   const views = ASK_VIEWS.join(", ");
   let generated = "";
-  const raw = await complete(
-    env.AI,
-    `You write one PostgreSQL SELECT for a synthetic revenue-assurance book. Use only these views: ${views}. Columns are self-explanatory (area, leakage, category, merchant_id, status, metric, day, value, policy, approval_uplift, fee_savings, case_id, risk_id). Reply with SQL only, no markdown. Limit 50 rows. Question: ${question}`,
-  );
-  generated = raw.trim().replace(/^```(?:sql)?\s*/i, "").replace(/\s*```$/, "");
+  const trimmedQ = question.trim();
+  // Never send writes or stacked statements to Workers AI (saves the free neuron cap and fails closed).
+  if (ASK_WRITE.test(trimmedQ) || /;\s*\S/.test(trimmedQ)) {
+    const err = "Only a single allow-listed SELECT is permitted. Write and multi-statement questions are rejected without execution.";
+    await db
+      .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, error) VALUES (?, now(), ?, ?, 'rejected', ?)")
+      .bind(crypto.randomUUID(), question, "", err)
+      .run();
+    return { question, sql: "", status: "rejected" as const, error: err, rows: [] as Record<string, unknown>[] };
+  }
+  if (/^\s*(with|select)\b/i.test(trimmedQ)) {
+    generated = trimmedQ;
+  } else {
+    const raw = await complete(
+      env.AI,
+      `You write one PostgreSQL SELECT for a synthetic revenue-assurance book. Use only these views: ${views}. Columns are self-explanatory (area, leakage, category, merchant_id, status, metric, day, value, policy, approval_uplift, fee_savings, case_id, risk_id). Reply with SQL only, no markdown. Limit 50 rows. Question: ${question}`,
+    );
+    generated = raw.trim().replace(/^```(?:sql)?\s*/i, "").replace(/\s*```$/, "");
+  }
   let sqlText: string;
   try {
     sqlText = validateAskSql(generated);
