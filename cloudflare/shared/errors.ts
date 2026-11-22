@@ -11,6 +11,9 @@ export function publicErrorMessage(err: unknown, fallback = "Something went wron
   if (/neuron|quota|rate limit|capacity|model.*(unavailable|overloaded)|workers ai/i.test(raw)) {
     return "The AI service is temporarily unavailable or over its daily limit. Please try again later.";
   }
+  if (/abort|timed out|timeout|failed to fetch|networkerror|network error|connection dropped|load failed/i.test(raw)) {
+    return "The step timed out or the connection dropped. You can retry the remaining step.";
+  }
   if (raw.length > 180) return fallback;
   return raw;
 }

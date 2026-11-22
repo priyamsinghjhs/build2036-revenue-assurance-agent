@@ -97,8 +97,8 @@ export function AuditPanel({
     <div className="space-y-3 text-sm">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         {verdict ? <SeverityBadge value={verdict} /> : null}
-        {output.source === "skeleton" && (
-          <span className="text-[11px] uppercase tracking-wide text-muted">Deterministic skeleton</span>
+        {(output.source === "deterministic" || output.source === "skeleton") && (
+          <span className="text-[11px] uppercase tracking-wide text-muted">Deterministic fallback — routed to review</span>
         )}
         {output.confidence != null && (
           <span className="text-[11px] text-muted">Confidence {String(output.confidence)}%</span>

@@ -1,12 +1,41 @@
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
+type RequestOpts = RequestInit & { timeoutMs?: number };
+
+async function request<T>(path: string, init?: RequestOpts): Promise<T> {
+  const { timeoutMs, signal, ...rest } = init ?? {};
+  const ac = new AbortController();
+  const onAbort = () => ac.abort();
+  if (signal) {
+    if (signal.aborted) ac.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+  const timer = timeoutMs ? globalThis.setTimeout(() => ac.abort(), timeoutMs) : undefined;
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...rest,
+      signal: ac.signal,
+      headers: {
+        Accept: "application/json",
+        ...(rest.body ? { "Content-Type": "application/json" } : {}),
+        ...(rest.headers ?? {}),
+      },
+    });
+  } catch (err) {
+    if (timer) globalThis.clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+    const name = err instanceof Error ? err.name : "";
+    const msg = err instanceof Error ? err.message : String(err ?? "");
+    if (name === "AbortError" || /aborted|timed out|timeout/i.test(msg)) {
+      throw new Error("The step timed out. You can retry the remaining step.");
+    }
+    if (/Failed to fetch|NetworkError|network error|Load failed/i.test(msg) || (err instanceof TypeError && !msg)) {
+      throw new Error("The connection dropped before the step finished. You can retry the remaining step.");
+    }
+    throw err;
+  } finally {
+    if (timer) globalThis.clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
   const text = await response.text();
   let data: unknown = null;
   try {
@@ -32,10 +61,11 @@ export const api = {
   actions: () => request<{ actions: ActionRow[] }>("/api/actions"),
   startRun: (body: { scope: string; domain?: string }) =>
     request<{ run_id: string; sequence: string[] }>("/api/agents/runs", { method: "POST", body: JSON.stringify(body) }),
-  step: (body: Record<string, string>) =>
+  step: (body: Record<string, string>, opts?: { timeoutMs?: number }) =>
     request<{ agent_id: string; output: unknown; created_at: string }>("/api/agents/step", {
       method: "POST",
       body: JSON.stringify(body),
+      timeoutMs: opts?.timeoutMs ?? 22_000,
     }),
   complete: (run_id: string) =>
     request("/api/agents/complete", { method: "POST", body: JSON.stringify({ run_id }) }),

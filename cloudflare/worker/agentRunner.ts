@@ -1,4 +1,4 @@
-import { complete } from "./llm";
+import { complete, classifyAIError, DEFAULT_AI_TIMEOUT_MS } from "./llm";
 import {
   AGENT_ROSTER,
   type AgentId,
@@ -195,9 +195,62 @@ function reconSchema(domain: string) {
   return `{"domain":"${domain}","assessment":"one sentence","match_quality":"good|watch|poor","top_gaps":[{"ref":"","issue":"","amount":0,"priority":"high|medium|low"}],"recommended_focus":"short"}`;
 }
 
+const STEP_BUDGET_MS = 22_000;
+
+function factBag(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== "object") return {};
+  const rec = input as Record<string, unknown>;
+  const ex = rec.exception && typeof rec.exception === "object" ? rec.exception as Record<string, unknown> : rec;
+  return { ...rec, ...ex };
+}
+
+function deterministicStepOutput(
+  agentId: AgentId,
+  input: unknown,
+  priors: { agent: string; output: unknown }[],
+  reason: string,
+): Record<string, unknown> {
+  const facts = factBag(input);
+  const leakage = facts.leakage ?? facts.amount ?? facts.expected_amount;
+  const ref = String(facts.recon_ref ?? facts.ref_id ?? facts.exception_id ?? "this exception");
+  const area = String(facts.area ?? facts.domain ?? "revenue assurance");
+  if (agentId === "auditor") {
+    const out = finalizeAuditorOutput({ parse_error: true, source: "deterministic" }, input, priors);
+    out.source = "deterministic";
+    out.verdict = "needs_review";
+    out.signoff = "needs_review";
+    const note = `Deterministic auditor fallback (${reason}). The LLM step did not complete or was unavailable. Routed to human review.`;
+    out.compliance_notes = `${note} ${String(out.compliance_notes ?? "")}`.trim();
+    out.rationale = String(out.rationale ?? note);
+    return out as unknown as Record<string, unknown>;
+  }
+  if (agentId === "action") {
+    return {
+      actions: [
+        {
+          type: "escalate",
+          action: "escalate",
+          amount: leakage ?? null,
+          currency: String(facts.currency ?? "INR"),
+          confidence: 40,
+          rationale: `Deterministic proposal for ${ref}: the action agent could not finish (${reason}). Escalate for human review.`,
+        },
+      ],
+      source: "deterministic",
+    };
+  }
+  return {
+    root_cause: `Deterministic summary for ${ref} in ${area}: the investigator could not finish (${reason}). Review the SQL facts before acting.`,
+    evidence: [ref, area].filter(Boolean),
+    affected: [ref],
+    confidence: 40,
+    source: "deterministic",
+  };
+}
+
 export async function runAgentStep(
   env: Env,
-  opts: { runId: string; agentId: AgentId; scope: string; domain?: string; exceptionId?: string },
+  opts: { runId: string; agentId: AgentId; scope: string; domain?: string; exceptionId?: string; mode?: "llm" | "deterministic" },
 ) {
   const input = await buildInput(env, opts.agentId, opts.scope, opts.domain, opts.exceptionId);
   const priors = await priorOutputs(getDb(env), opts.runId);
@@ -207,24 +260,68 @@ export async function runAgentStep(
   let output: Record<string, unknown> = {};
   let grounding = checkGrounding({}, user);
   let retries = 0;
-  const maxRetries = 2;
   let prompt = basePrompt;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const raw = await complete(env.AI, prompt, opts.agentId === "auditor" ? { json: true } : {});
-    try {
-      output = parseJson(raw);
-    } catch {
-      output = { raw, parse_error: true };
-    }
-    output = sanitizeAgentOutput(output);
+  const started = Date.now();
+  const deadline = started + STEP_BUDGET_MS;
+  if (opts.mode === "deterministic") {
+    output = sanitizeAgentOutput(deterministicStepOutput(opts.agentId, input, briefPriors, "requested"));
     if (opts.agentId === "auditor") {
       output = finalizeAuditorOutput(output, input, briefPriors, checkGrounding(output, user));
+      output.source = "deterministic";
+      output.verdict = "needs_review";
+      output.signoff = "needs_review";
     }
     grounding = checkGrounding(output, user);
-    if (grounding.passed) break;
-    if (attempt === maxRetries) break;
-    retries += 1;
-    prompt = `${basePrompt}\n\n${retryPrompt(grounding.unsupported)}\n\nPREVIOUS_OUTPUT:\n${JSON.stringify(output).slice(0, 2000)}`;
+  } else {
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining < 2000) {
+        output = sanitizeAgentOutput(deterministicStepOutput(opts.agentId, input, briefPriors, "step budget exhausted"));
+        if (opts.agentId === "auditor") {
+          output = finalizeAuditorOutput(output, input, briefPriors, checkGrounding(output, user));
+          output.source = "deterministic";
+          output.verdict = "needs_review";
+          output.signoff = "needs_review";
+        }
+        break;
+      }
+      const timeoutMs = Math.min(DEFAULT_AI_TIMEOUT_MS, Math.max(2000, remaining - 500));
+      try {
+        const raw = await complete(env.AI, prompt, {
+          json: opts.agentId === "auditor",
+          timeout_ms: timeoutMs,
+        });
+        try {
+          output = parseJson(raw);
+        } catch {
+          output = { raw, parse_error: true };
+        }
+        output = sanitizeAgentOutput(output);
+        if (opts.agentId === "auditor") {
+          output = finalizeAuditorOutput(output, input, briefPriors, checkGrounding(output, user));
+        }
+        grounding = checkGrounding(output, user);
+        if (grounding.passed) break;
+        if (attempt === 1 || deadline - Date.now() < 4000) break;
+        retries += 1;
+        prompt = `${basePrompt}\n\n${retryPrompt(grounding.unsupported)}\n\nPREVIOUS_OUTPUT:\n${JSON.stringify(output).slice(0, 2000)}`;
+      } catch (err) {
+        const classified = classifyAIError(err);
+        const reason = classified.kind === "cap"
+          ? "Workers AI quota or neuron cap"
+          : classified.kind === "timeout"
+            ? "Workers AI timeout"
+            : classified.message;
+        output = sanitizeAgentOutput(deterministicStepOutput(opts.agentId, input, briefPriors, reason));
+        if (opts.agentId === "auditor") {
+          output = finalizeAuditorOutput(output, input, briefPriors, checkGrounding(output, user));
+          output.source = "deterministic";
+          output.verdict = "needs_review";
+          output.signoff = "needs_review";
+        }
+        break;
+      }
+    }
   }
   const passed = grounding.passed;
   output.verification = passed ? "grounded" : "unverified";

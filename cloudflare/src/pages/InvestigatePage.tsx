@@ -10,6 +10,14 @@ import { publicErrorMessage } from "../../shared/errors";
 import { normalizeAmount, normalizeConfidence } from "../../shared/numbers";
 
 const STEPS = ["investigator", "action", "auditor"] as const;
+type StepId = (typeof STEPS)[number];
+
+function stepComplete(id: StepId, out?: Record<string, unknown>) {
+  if (!out) return false;
+  if (id === "auditor") return Array.isArray(out.checks) && (out.checks as unknown[]).length === 6;
+  if (id === "action") return Array.isArray(out.actions);
+  return Boolean(out.root_cause || out.summary);
+}
 
 export default function InvestigatePage() {
   const { exceptionId } = useParams();
@@ -18,6 +26,8 @@ export default function InvestigatePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [step, setStep] = useState<string>("");
+  const [failedStep, setFailedStep] = useState<string>("");
+  const [runId, setRunId] = useState("");
   const [outputs, setOutputs] = useState<Record<string, Record<string, unknown>>>({});
   const [decisions, setDecisions] = useState<SuggestionDecision[]>([]);
 
@@ -37,6 +47,11 @@ export default function InvestigatePage() {
       setRow(null);
       return;
     }
+    setError("");
+    setFailedStep("");
+    setStep("");
+    setRunId("");
+    setOutputs({});
     api
       .exception(exceptionId)
       .then((r) => setRow(r.exception))
@@ -44,45 +59,67 @@ export default function InvestigatePage() {
     api
       .latest(`exception:${exceptionId}`)
       .then((r) => {
+        const latest = r.latest as { run?: { run_id?: string; status?: string }; outputs?: { agent_id: string; output: unknown }[] } | null;
         const next: Record<string, Record<string, unknown>> = {};
-        for (const o of r.latest?.outputs ?? []) {
+        for (const o of latest?.outputs ?? []) {
           const out = o.output;
           if (out && typeof out === "object") next[o.agent_id] = out as Record<string, unknown>;
         }
         setOutputs(next);
+        const id = latest?.run?.run_id;
+        if (id) setRunId(id);
       })
       .catch(() => undefined);
     api.suggestionDecisions(exceptionId).then((r) => setDecisions(r.decisions ?? [])).catch(() => undefined);
   }, [exceptionId]);
 
-  async function run() {
+  async function run(resume: boolean) {
     if (!row) return;
     setBusy(true);
     setError("");
-    setOutputs({});
+    setFailedStep("");
+    let current = "";
     try {
-      const started = await api.startRun({ scope: `exception:${row.exception_id}`, domain: row.area });
-      const next: Record<string, Record<string, unknown>> = {};
+      const next: Record<string, Record<string, unknown>> = resume ? { ...outputs } : {};
+      if (!resume) setOutputs({});
+      let id = resume ? runId : "";
+      if (!id) {
+        const started = await api.startRun({ scope: `exception:${row.exception_id}`, domain: row.area });
+        id = started.run_id;
+        setRunId(id);
+      }
       for (const agentId of STEPS) {
+        if (resume && stepComplete(agentId, next[agentId])) continue;
+        current = agentId;
         setStep(agentId);
         const res = await api.step({
-          run_id: started.run_id,
+          run_id: id,
           agent_id: agentId,
           scope: `exception:${row.exception_id}`,
           domain: row.area,
           exception_id: row.exception_id,
         });
-        next[agentId] = res.output as Record<string, unknown>;
+        next[agentId] = (res.output ?? {}) as Record<string, unknown>;
         setOutputs({ ...next });
+        if (agentId === "auditor" && !stepComplete(agentId, next[agentId])) {
+          throw new Error("The auditor returned an incomplete result. You can retry this step.");
+        }
       }
-      await api.complete(started.run_id);
+      await api.complete(id);
       setStep("");
     } catch (e) {
-      setError(publicErrorMessage(e, "The investigation could not be completed. Please try again."));
+      setFailedStep(current);
+      setStep("");
+      setError(publicErrorMessage(e, "The investigation could not be completed. You can retry the remaining step."));
     } finally {
       setBusy(false);
     }
   }
+
+  const hasDone = STEPS.some((id) => stepComplete(id, outputs[id]));
+  const allDone = STEPS.every((id) => stepComplete(id, outputs[id]));
+  const canResume = Boolean(runId) && hasDone && !allDone;
+  const showRetry = Boolean(error) || canResume;
 
   return (
     <div className="space-y-6">
@@ -116,35 +153,62 @@ export default function InvestigatePage() {
                 <div className="text-xl font-semibold text-danger">{inr(row.leakage, true)}</div>
               </div>
             </div>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={run}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:bg-accent-700 disabled:opacity-50"
-            >
-              {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              {busy ? `Running ${step}…` : "Run investigation"}
-            </button>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void run(showRetry)}
+                className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:bg-accent-700 disabled:opacity-50"
+              >
+                {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                {busy ? `Running ${step}…` : showRetry ? "Retry remaining" : "Run investigation"}
+              </button>
+              {showRetry && !busy && (
+                <button
+                  type="button"
+                  onClick={() => void run(false)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-sm font-semibold text-ink hover:bg-slate-50"
+                >
+                  Run from the start
+                </button>
+              )}
+            </div>
             {error && <p className="mt-2 text-sm text-danger">{error}</p>}
           </div>
 
           <ol className="grid gap-3 md:grid-cols-3">
             {STEPS.map((id, i) => {
               const out = outputs[id];
-              const active = step === id;
+              const active = busy && step === id;
+              const failed = !busy && failedStep === id;
+              const done = stepComplete(id, out);
               return (
                 <li key={id} className="rounded-xl border border-line bg-white p-4">
                   <div className="text-[11px] uppercase tracking-wider text-muted">
-                    Step {i + 1} {active ? "· running" : out ? "· done" : ""}
+                    Step {i + 1} {active ? "· running" : failed ? "· failed" : done ? "· done" : ""}
                   </div>
                   <div className="mt-1 font-semibold capitalize">{id}</div>
                   {out && <VisualOutput id={id} output={out} exceptionId={row.exception_id} />}
-                  {!out && <p className="mt-2 text-xs text-muted">Waiting</p>}
+                  {failed && (
+                    <div className="mt-2 space-y-2">
+                      <p className="text-xs text-danger">This step did not finish. Retry to continue from here.</p>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void run(true)}
+                        className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs font-semibold text-ink hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        Retry this step
+                      </button>
+                    </div>
+                  )}
+                  {!out && !active && !failed && <p className="mt-2 text-xs text-muted">Waiting</p>}
                 </li>
               );
             })}
           </ol>
-          {outputs.auditor && (
+          {outputs.auditor && stepComplete("auditor", outputs.auditor) && (
             <section className="rounded-xl border border-line bg-white p-4">
               <h2 className="mb-2 text-sm font-semibold text-ink">Auditor review</h2>
               <AuditPanel
@@ -223,6 +287,9 @@ function VisualOutput({ id, output, exceptionId }: { id: string; output: Record<
             }
             return badge;
           })()}
+          {output.source === "deterministic" || output.source === "skeleton" ? (
+            <p className="text-[11px] uppercase tracking-wide text-muted">Deterministic fallback</p>
+          ) : null}
           {output.verification === "unverified" && (
             <p className="text-xs text-warning">Unverified — grounding check failed. Do not treat as fact.{exceptionId ? " " : ""}{exceptionId ? <Link to={`/review/${encodeURIComponent(exceptionId)}`} className="underline">Open review</Link> : null}</p>
           )}

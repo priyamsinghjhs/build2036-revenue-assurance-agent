@@ -197,12 +197,14 @@ app.post("/api/agents/step", async (c) => {
   if (!AGENT_ROSTER.some((a) => a.id === agentId)) {
     throw new HTTPException(400, { message: "Unknown agent_id" });
   }
+  const mode = optionalString(body, "mode") === "deterministic" ? "deterministic" as const : undefined;
   const result = await runAgentStep(c.env, {
     runId,
     agentId,
     scope: optionalString(body, "scope") || "all",
     domain: optionalString(body, "domain") || undefined,
     exceptionId: optionalString(body, "exception_id") || undefined,
+    mode,
   });
   return c.json(result);
 });

@@ -706,6 +706,72 @@ if (report.overlap_hits || errors.length || report.chart_mismatches.length) proc
   return { ok: techPass, summary };
 }
 
+
+async function sectionInvestigateCfg003() {
+  const eid = "config:config_unapproved:CFG-003";
+  const others = [
+    "scheme:missing_scheme_settlement:CAP00216",
+    "apm:apm_report_mismatch:APM0008",
+  ];
+  const ex = await api(`/api/exceptions/${encodeURIComponent(eid)}`);
+  const row = ex.body?.exception || ex.body;
+  const okEx = ex.ok && row?.exception_id === eid && Number(row.leakage) > 2000;
+  if (!okEx) {
+    card.add("investigator", { functional: "fail", detail: `CFG-003 load → ${ex.status}` });
+    card.add("auditor", { functional: "fail", detail: "CFG-003 exception missing; skipped pipeline" });
+    return;
+  }
+  for (const other of others) {
+    const r = await api(`/api/exceptions/${encodeURIComponent(other)}`);
+    const latest = await api(`/api/agents/latest?scope=${encodeURIComponent("exception:" + other)}`);
+    const agents = (latest.body?.latest?.outputs || []).map((o) => o.agent_id);
+    card.notes.push(`${other} → ${r.status}; latest agents=[${agents.join(",")}] status=${latest.body?.latest?.run?.status || "none"}`);
+  }
+  const started = await api("/api/agents/runs", {
+    method: "POST",
+    body: JSON.stringify({ scope: `exception:${eid}`, domain: "config" }),
+  });
+  if (!started.ok || !started.body?.run_id) {
+    card.add("investigator", { functional: "fail", detail: `CFG-003 start run failed ${started.status}` });
+    card.add("auditor", { functional: "fail", detail: `CFG-003 start run failed ${started.status}` });
+    return;
+  }
+  const runId = started.body.run_id;
+  const results = {};
+  for (const agent of ["investigator", "action", "auditor"]) {
+    results[agent] = await api("/api/agents/step", {
+      method: "POST",
+      body: JSON.stringify({
+        run_id: runId,
+        agent_id: agent,
+        scope: `exception:${eid}`,
+        domain: "config",
+        exception_id: eid,
+        mode: "deterministic",
+      }),
+    });
+  }
+  const done = await api("/api/agents/complete", { method: "POST", body: JSON.stringify({ run_id: runId }) });
+  const inv = results.investigator;
+  const act = results.action;
+  const aud = results.auditor;
+  const invOk = inv.ok && (inv.body.output?.root_cause || inv.body.output?.summary) && inv.ms < 20000;
+  const actOk = act.ok && Array.isArray(act.body.output?.actions) && act.ms < 20000;
+  const checks = aud.body?.output?.checks;
+  const audOk = aud.ok
+    && Array.isArray(checks)
+    && checks.length === 6
+    && aud.body.output.source === "deterministic"
+    && (aud.body.output.verdict === "needs_review" || aud.body.output.signoff === "needs_review")
+    && aud.ms < 20000;
+  card.add("investigator", { functional: invOk ? "pass" : "fail", detail: `CFG-003 investigator ${inv.status} ${inv.ms}ms` });
+  card.add("action", { functional: actOk ? "pass" : "fail", detail: `CFG-003 action ${act.status} ${act.ms}ms actions=${act.body?.output?.actions?.length ?? 0}` });
+  card.add("auditor", {
+    functional: audOk && done.ok ? "pass" : "fail",
+    detail: `CFG-003 auditor fallback checks=${checks?.length ?? 0} source=${aud.body?.output?.source} verdict=${aud.body?.output?.verdict} ${aud.ms}ms complete=${done.status}`,
+  });
+}
+
 async function sectionTypecheck() {
   const { spawnSync } = await import("node:child_process");
   const tscW = spawnSync("npx", ["tsc", "-p", "tsconfig.worker.json", "--noEmit"], { cwd: ROOT, encoding: "utf8" });
@@ -737,6 +803,8 @@ async function main() {
   await sectionGates();
   console.log("section: autonomy / scheduled");
   await sectionAutonomy(sql);
+  console.log("section: CFG-003 investigate path");
+  await sectionInvestigateCfg003();
   console.log("section: typecheck");
   await sectionTypecheck();
   console.log("section: playwright");

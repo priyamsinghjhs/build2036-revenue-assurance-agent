@@ -1,6 +1,53 @@
 import { MAX_TOKENS, MODEL, TEMPERATURE, type AiBinding } from "./types";
 
-export type CompleteOpts = { json?: boolean; max_tokens?: number };
+export type CompleteOpts = { json?: boolean; max_tokens?: number; timeout_ms?: number };
+
+export const DEFAULT_AI_TIMEOUT_MS = 12_000;
+
+export class WorkersAIError extends Error {
+  readonly kind: "timeout" | "empty" | "cap" | "failed";
+  constructor(message: string, kind: "timeout" | "empty" | "cap" | "failed" = "failed") {
+    super(message);
+    this.name = "WorkersAIError";
+    this.kind = kind;
+  }
+}
+
+export function isWorkersAIError(err: unknown): err is WorkersAIError {
+  return err instanceof WorkersAIError;
+}
+
+export function classifyAIError(err: unknown): WorkersAIError {
+  if (err instanceof WorkersAIError) return err;
+  const raw = err instanceof Error ? err.message : String(err ?? "Workers AI failed");
+  if (/timed out|timeout|aborted/i.test(raw)) return new WorkersAIError(raw, "timeout");
+  if (/neuron|quota|rate limit|capacity|exceeded|throttl/i.test(raw)) return new WorkersAIError(raw, "cap");
+  return new WorkersAIError(raw, "failed");
+}
+
+type TimerFn = {
+  setTimeout: (cb: () => void, ms: number) => unknown;
+  clearTimeout: (id: unknown) => void;
+};
+
+export function withTimeout<T>(promise: Promise<T>, ms: number, label = "Workers AI"): Promise<T> {
+  const timers = globalThis as unknown as TimerFn;
+  return new Promise((resolve, reject) => {
+    const timer = timers.setTimeout(() => {
+      reject(new WorkersAIError(`${label} timed out after ${ms}ms`, "timeout"));
+    }, ms);
+    promise.then(
+      (value) => {
+        timers.clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        timers.clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
 
 export async function complete(ai: AiBinding, prompt: string, opts: CompleteOpts = {}): Promise<string> {
   const inputs: Record<string, unknown> = {
@@ -11,21 +58,27 @@ export async function complete(ai: AiBinding, prompt: string, opts: CompleteOpts
   if (opts.json) {
     inputs.response_format = { type: "json_object" };
   }
+  const timeoutMs = opts.timeout_ms ?? DEFAULT_AI_TIMEOUT_MS;
   let result: unknown;
   try {
-    result = await ai.run(MODEL, inputs);
+    result = await withTimeout(Promise.resolve(ai.run(MODEL, inputs)), timeoutMs, "Workers AI");
   } catch (err) {
-    if (opts.json) {
+    const classified = classifyAIError(err);
+    if (opts.json && classified.kind !== "timeout" && classified.kind !== "cap") {
       // Some Workers AI accounts/models reject response_format; retry without it.
       delete inputs.response_format;
-      result = await ai.run(MODEL, inputs);
+      try {
+        result = await withTimeout(Promise.resolve(ai.run(MODEL, inputs)), timeoutMs, "Workers AI");
+      } catch (retryErr) {
+        throw classifyAIError(retryErr);
+      }
     } else {
-      throw err;
+      throw classified;
     }
   }
   const text = extractText(result);
   if (!text) {
-    throw new Error(describeEmpty(result));
+    throw new WorkersAIError(describeEmpty(result), "empty");
   }
   return text;
 }

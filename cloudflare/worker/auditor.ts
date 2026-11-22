@@ -96,7 +96,7 @@ export type AuditorOutput = {
   rationale: string;
   cfo_one_liner: string;
   schema_valid: boolean;
-  source: "llm" | "skeleton";
+  source: "llm" | "deterministic";
   compliance_notes?: string;
   [key: string]: unknown;
 };
@@ -248,7 +248,7 @@ export function normalizeAuditorOutput(raw: Record<string, unknown>, fallback?: 
     cfo_one_liner: cfo,
     compliance_notes: asStr(raw.compliance_notes, rationale),
     schema_valid: isValidAuditorShape(raw) && checks.length === 6,
-    source: isValidAuditorShape(raw) ? "llm" : "skeleton",
+    source: isValidAuditorShape(raw) ? "llm" : "deterministic",
   };
 }
 
@@ -268,7 +268,7 @@ function emptySkeleton(): AuditorOutput {
     rationale: "insufficient data",
     cfo_one_liner: "insufficient data — the auditor could not complete a structured review from the provided context.",
     schema_valid: false,
-    source: "skeleton",
+    source: "deterministic",
   };
 }
 
@@ -486,7 +486,7 @@ export function buildAuditorSkeleton(
     cfo_one_liner: cfo,
     compliance_notes: rationale,
     schema_valid: true,
-    source: "skeleton",
+    source: "deterministic",
   };
 }
 
@@ -498,7 +498,7 @@ export function finalizeAuditorOutput(
 ): AuditorOutput {
   const skeleton = buildAuditorSkeleton(input, priors, grounding);
   const valid = isValidAuditorShape(raw) && !raw.parse_error;
-  const out = valid ? normalizeAuditorOutput(raw, skeleton) : { ...skeleton, schema_valid: false, source: "skeleton" as const };
+  const out = valid ? normalizeAuditorOutput(raw, skeleton) : { ...skeleton, schema_valid: false, source: "deterministic" as const };
   if (grounding && !grounding.passed) {
     out.verdict = "needs_review";
     out.signoff = "needs_review";
