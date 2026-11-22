@@ -67,6 +67,7 @@ BEGIN
   UPDATE ra_anomaly_events e
      SET status = 'closed'
    WHERE e.status = 'open'
+     AND e.metric NOT LIKE 'iforest_%'
      AND (e.metric, e.segment, e.day) NOT IN (
        ('approval_rate','UPI', DATE '2026-10-18'),
        ('settlement_latency','ACQ-ICICI', DATE '2026-10-22'),
@@ -74,7 +75,7 @@ BEGIN
        ('refund_cb_ratio','ALL', DATE '2026-10-27')
      );
 END;
-$sync$;;
+$sync$;
 
 CREATE OR REPLACE FUNCTION public.refresh_ra_v7()
 RETURNS void

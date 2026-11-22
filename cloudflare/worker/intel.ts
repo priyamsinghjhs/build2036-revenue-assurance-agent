@@ -343,7 +343,7 @@ export async function listAnomalies(db: AppDb) {
     events: events ?? [],
     open_count,
     series: series ?? [],
-    note: "Featured events are the four injected seeds on the synthetic October book (UPI approval, ICICI settlement latency, Visa fee ratio, book-wide refund/CB). Refresh is idempotent by (metric, segment, day) and does not re-open investigated, resolved, or acknowledged events. A temporal autoencoder can be trained offline later and plugged in as an additional sensor. This page uses rolling z-score and EWMA bands computed in Postgres only.",
+    note: "Featured events combine the four injected z-score/EWMA seeds (UPI approval, ICICI settlement latency, Visa fee ratio, book-wide refund/CB) with isolation-forest flags on settlement fee ratios and FX markup (metric iforest_settlement / iforest_fx). Refresh is idempotent by (metric, segment, day) and does not re-open investigated, resolved, or acknowledged events. An sklearn MLP autoencoder is trained offline; reconstruction error is stored in Neon and is not scored in the Worker. Isolation-forest trees are also exported for single-row scoring in the Worker.",
   };
 }
 
@@ -368,12 +368,16 @@ export async function routingSummary(db: AppDb) {
   const { results: segments } = await db
     .prepare("SELECT * FROM ra_routing_sim_segments WHERE policy='thompson' ORDER BY segment_kind, fee_savings DESC")
     .all<Record<string, unknown>>();
+  const retry = await db.prepare("SELECT * FROM ra_retry_sim WHERE policy='thompson_retry'").first<Record<string, unknown>>();
+  const { results: arms } = await db.prepare("SELECT * FROM ra_retry_sim_arms WHERE policy='thompson_retry' ORDER BY arm").all<Record<string, unknown>>();
   return {
     synthetic: true,
     simulation: true,
     policies: policies ?? [],
     segments: segments ?? [],
-    note: "Simulation on the synthetic October 2026 book. Counterfactual approval rates use historical segment rates (model-based offline replay of epsilon-greedy and Thompson sampling), not live traffic. Negative fee savings mean the higher-approval route is slightly more expensive in acquirer bps.",
+    note: "Simulation on the synthetic October 2026 book. Counterfactual approval rates use historical segment rates (model-based offline replay of epsilon-greedy and Thompson sampling), not live traffic. Negative fee savings mean the higher-approval route is slightly more expensive in acquirer bps. The retry block is a separate fee-aware Thompson-style replay on soft declines (timing / alternate acquirer / network token); also not live traffic.",
+    retry: retry ?? null,
+    retry_arms: arms ?? [],
   };
 }
 

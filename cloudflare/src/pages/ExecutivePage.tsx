@@ -220,6 +220,55 @@ export default function ExecutivePage() {
               <Link to="/risks" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Risk library</Link>
               <Link to="/files" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">File completeness</Link>
               <Link to="/ingestion" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">File ingestion</Link>
+              <Link to="/models" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Model intelligence</Link>
+              <Link to="/false-declines" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">False declines</Link>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {data.intelligence && data.intelligence.models_version && data.intelligence.models_version !== "untrained" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Model intelligence</CardTitle>
+            <CardDescription>
+              False-decline recovery is book leakage (lost revenue, recoverable). Chargeback exposure is a high-risk slice (p ≥ 0.55), not a second book-leakage area.
+              Isolation-forest flags sit with the anomaly sensors. Retry recovery is a fee-aware simulation, not live traffic.
+              Metrics are on the synthetic October book ({data.intelligence.models_version}).
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard
+                label="False-decline recovery"
+                value={inr(data.intelligence.false_decline_recovery ?? 0, true)}
+                hint={`${data.intelligence.false_decline_n ?? 0} soft declines · book leakage`}
+                tone="leak"
+              />
+              <KpiCard
+                label="Chargeback high-risk exposure"
+                value={inr(data.intelligence.chargeback_exposure ?? 0, true)}
+                hint="Not booked leakage"
+                tone="warn"
+              />
+              <KpiCard
+                label="Isolation-forest open"
+                value={String(data.intelligence.iforest_open ?? 0)}
+                hint={`Open anomalies ${data.intelligence.anomaly_open}`}
+                tone="warn"
+              />
+              <KpiCard
+                label="Retry recovered (sim)"
+                value={inr(data.intelligence.retry_recovered ?? 0, true)}
+                hint={`Uplift ${pct(data.intelligence.retry_uplift ?? 0)}`}
+                tone="ok"
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              <Link to="/models" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Model cards &amp; SHAP</Link>
+              <Link to="/false-declines" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">False declines</Link>
+              <Link to="/anomalies" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Anomalies</Link>
+              <Link to="/routing" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Retry simulation</Link>
             </div>
           </CardContent>
         </Card>

@@ -18,6 +18,7 @@ import { ExceptionTable } from "@/components/ExceptionTable";
 import { KpiCard } from "@/components/KpiCard";
 import { StatusBar } from "@/components/StatusBar";
 import { DomainCharts } from "@/components/DomainCharts";
+import { ShapBars } from "@/components/ShapBars";
 import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +52,7 @@ const ROUTE_TO_AREA: Record<string, string> = {
   interfaces: "interfaces",
   aml: "aml",
   success: "success",
+  "false-declines": "false_declines",
 };
 
 const FEE_AREAS = ["gateway", "network", "partner"] as const;
@@ -151,8 +153,16 @@ export default function AreaPage() {
               <div><dt className="text-[11px] uppercase text-muted">Actual</dt><dd className="tabular-nums">{inr(selected.actual_amount, true)}</dd></div>
               <div><dt className="text-[11px] uppercase text-muted">Leakage</dt><dd className="tabular-nums text-danger">{inr(selected.leakage, true)}</dd></div>
               <div><dt className="text-[11px] uppercase text-muted">When</dt><dd>{selected.ts ?? "—"}</dd></div>
+              {selected.score != null ? (
+                <div><dt className="text-[11px] uppercase text-muted">Model score</dt><dd className="tabular-nums">{Number(selected.score).toFixed(3)}{selected.model_id ? ` · ${selected.model_id.replace(/_/g, " ")}` : ""}</dd></div>
+              ) : null}
             </dl>
             <Button asChild>
+              {selected.top_factors && selected.top_factors.length > 0 ? (
+                <div className="sm:col-span-2">
+                  <ShapBars rows={selected.top_factors} title="Top SHAP drivers (path attribution)" />
+                </div>
+              ) : null}
               <a href={`/investigate/${encodeURIComponent(selected.exception_id)}`}>Run investigation</a>
             </Button>
           </div>
@@ -215,7 +225,7 @@ function AreaChartBlock({ series }: { series: { type: string; points: Record<str
           ? ["leakage"]
           : Object.keys(raw[0] || {}).filter((k) => k !== "day" && k !== "scheme" && k !== "method" && k !== "name" && k !== "n");
   const isBar = type !== "fx" && type !== "trend";
-  const longCats = isBar && (xKey === "scheme" || xKey === "name" || raw.length > 8);
+  const longCats = isBar && xKey !== "day" && (xKey === "scheme" || xKey === "name" || raw.length > 8);
   const Chart = isBar ? BarChart : LineChart;
   const colors = ["#1d4ed8", "#0f172a", "#64748b", "#b91c1c"];
   const height = longCats ? Math.max(280, raw.length * 52) : 320;
@@ -255,7 +265,7 @@ function AreaChartBlock({ series }: { series: { type: string; points: Record<str
           {yKeys.map((k, i) =>
             isBar ? (
               <Bar key={k} dataKey={k} fill={colors[i % colors.length]} radius={longCats ? [0, 4, 4, 0] : [4, 4, 0, 0]}>
-                {yKeys.length === 1 ? (
+                {yKeys.length === 1 && xKey !== "day" && raw.length <= 14 ? (
                   <LabelList dataKey={k} position={longCats ? "right" : "top"} formatter={(v: unknown) => inr(Number(v), true)} style={{ fontSize: 10, fill: "#e2e8f0" }} />
                 ) : null}
               </Bar>

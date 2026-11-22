@@ -41,6 +41,7 @@ import {
   runRoutingSim, simulateRule, submitReview, updateCase, testRule, ruleTests, evalQuality,
 } from "./intel";
 import { listIngestion, persistIngestion } from "./ingest";
+import { getModel, modelDetail, modelsOverview, predictFeatures } from "./ml/registry";
 import { decideAuditorSuggestion, listSuggestionDecisions, type AuditSuggestion } from "./auditor";
 import { publicErrorMessage } from "../shared/errors";
 
@@ -360,6 +361,21 @@ app.post("/api/anomalies/investigate", async (c) => {
 });
 app.get("/api/routing", async (c) => c.json(await routingSummary(getDb(c.env))));
 app.post("/api/routing/simulate", async (c) => c.json(await runRoutingSim(getDb(c.env))));
+app.get("/api/models", async (c) =>
+  cachedJson("models-overview", () => modelsOverview(getDb(c.env)), 120_000, (p) => c.executionCtx.waitUntil(p)),
+);
+app.get("/api/models/:id", async (c) => {
+  const detail = await modelDetail(getDb(c.env), c.req.param("id"));
+  if (!detail) throw new HTTPException(404, { message: "Unknown model" });
+  return c.json(detail);
+});
+app.post("/api/models/predict", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { model_id?: string; features?: Record<string, number> };
+  const modelId = String(body.model_id || "");
+  if (!getModel(modelId)) throw new HTTPException(400, { message: "Unknown or unbundled model_id" });
+  const ev = predictFeatures(modelId, body.features || {});
+  return c.json({ synthetic: true, ...ev });
+});
 app.get("/api/cases", async (c) => c.json(await listCases(getDb(c.env))));
 app.get("/api/cases/:id", async (c) => {
   const row = await getCase(getDb(c.env), c.req.param("id"));

@@ -32,6 +32,7 @@ import {
   Share2,
   BadgePercent,
   SlidersHorizontal,
+  BrainCircuit,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import ExecutivePage from "@/pages/ExecutivePage";
@@ -52,6 +53,7 @@ import FilesPage from "@/pages/FilesPage";
 import IngestionPage from "@/pages/IngestionPage";
 import ReviewQueuePage from "@/pages/ReviewQueuePage";
 import ReviewPage from "@/pages/ReviewPage";
+import ModelsPage from "@/pages/ModelsPage";
 import { FilterProvider, useFilters } from "@/filters";
 import { Select } from "@/components/ui/select";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -82,6 +84,7 @@ const GROUPS = [
       { to: "/pricing", label: "Pricing", icon: Percent },
       { to: "/payouts", label: "Payouts", icon: Wallet },
       { to: "/chargebacks", label: "Chargebacks", icon: Store },
+      { to: "/false-declines", label: "False declines", icon: CreditCard },
       { to: "/hops", label: "Hops", icon: Waypoints },
       { to: "/interfaces", label: "Interface drops", icon: Radio },
       { to: "/success", label: "Success rate", icon: BadgePercent },
@@ -98,6 +101,7 @@ const GROUPS = [
   {
     label: "Intelligence",
     items: [
+      { to: "/models", label: "Model intelligence", icon: BrainCircuit },
       { to: "/contracts", label: "Contracts & rules", icon: BookOpen },
       { to: "/anomalies", label: "Anomalies", icon: ShieldAlert },
       { to: "/routing", label: "Routing optimisation", icon: Waypoints },
@@ -301,6 +305,7 @@ function Shell() {
             <Route path="/contracts" element={<ContractsPage />} />
             <Route path="/anomalies" element={<AnomaliesPage />} />
             <Route path="/routing" element={<RoutingPage />} />
+            <Route path="/models" element={<ModelsPage />} />
             <Route path="/ask" element={<AskPage />} />
             <Route path="/cases" element={<CasesPage />} />
             <Route path="/risks" element={<RisksPage />} />

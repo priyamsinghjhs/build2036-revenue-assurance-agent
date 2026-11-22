@@ -4,7 +4,7 @@
  * Hits the live API (read-only) and plants breaks only on a Neon test branch.
  * Never prints connection strings or tokens.
  */
-import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -53,6 +53,10 @@ const AGENTS = [
   ["auditor", "gated", "Suggestions need Accept; Dismiss needs a comment; nothing is sent"],
   ["anomaly", "yes", "Featured-seed sync is deterministic and idempotent"],
   ["routing_simulator", "yes", "Offline Thompson sampling replay"],
+  ["recon_false_declines", "yes", "Soft-decline recoverable leakage is scored by the GBDT and explained with SHAP"],
+  ["gbdt_models", "yes", "LightGBM trees are evaluated in TypeScript; metrics are synthetic"],
+  ["shap_explain", "yes", "Path-attribution SHAP sums to raw minus base"],
+  ["iforest", "yes", "Isolation-forest flags are deduped and never re-open closed events"],
   ["ask_your_data", "yes", "Allow-listed SELECT only"],
   ["learning", "gated", "Apply-learning is a recorded in-app action"],
   ["review", "gated", "Human review queue; comment is mandatory"],
@@ -92,6 +96,8 @@ async function sectionLiveApi() {
     ["/api/network-risk", (b) => b || true],
     ["/api/eval/quality", (b) => b || true],
     ["/api/dashboard/overview", (b) => b || true],
+    ["/api/models", (b) => Array.isArray(b.cards) && b.kpis],
+    ["/api/areas/false_declines", (b) => b.summary || b.exceptions || b.meta],
   ];
   const latencies = [];
   let fail = 0;
@@ -124,6 +130,7 @@ async function sectionLiveApi() {
     chargebacks: "chargebacks", pricing: "pricing", settlement: "recon_settlement", funding: "recon_funding",
     acquirer: "recon_acquirer", config: "recon_config", tax: "recon_tax", kyc: "recon_kyc",
     interfaces: "recon_interfaces", aml: "recon_aml", success: "recon_success",
+    false_declines: "recon_false_declines",
   };
   for (const [area, agent] of Object.entries(areaAgents)) {
     const r = await api(`/api/areas/${area}`);
@@ -141,6 +148,7 @@ async function sectionLiveApi() {
     ["contract_extract", "/api/contracts"],
     ["recon_files", "/api/files"],
     ["auditor", "/api/audit/suggestions?exception_id=scheme:missing_scheme_settlement:CAP00216"],
+    ["gbdt_models", "/api/models"],
   ];
   for (const [agent, path] of extraTech) {
     const r = await api(path);
@@ -502,6 +510,89 @@ async function triggerScheduled() {
   return result;
 }
 
+
+async function sectionModels(sql) {
+  const fd = JSON.parse(readFileSync(join(ROOT, "shared/ml/models/false_decline.json"), "utf8"));
+  const cb = JSON.parse(readFileSync(join(ROOT, "shared/ml/models/chargeback.json"), "utf8"));
+  const features = fd.self_check?.x || {};
+  const pred = await api("/api/models/predict", { method: "POST", body: JSON.stringify({ model_id: "false_decline", features }) });
+  const ev = pred.body || {};
+  const predOk = pred.ok && ev.check === true && nearly(ev.shap_sum + ev.base, ev.raw, 1e-5);
+  const matchTrain = fd.self_check?.pred == null || nearly(ev.score, fd.self_check.pred, 1e-5);
+  card.add("gbdt_models", {
+    technical: predOk && matchTrain ? "pass" : "fail",
+    functional: predOk && matchTrain ? "pass" : "fail",
+    detail: `predict false_decline score=${ev.score} raw=${ev.raw} check=${ev.check} train_match=${matchTrain} (${pred.status})`,
+  });
+  const pred2 = await api("/api/models/predict", { method: "POST", body: JSON.stringify({ model_id: "chargeback", features: cb.self_check?.x || features }) });
+  const ev2 = pred2.body || {};
+  const shapOk = pred2.ok && ev2.check === true && nearly((ev2.shap_sum ?? 0) + (ev2.base ?? 0), ev2.raw, 1e-5);
+  card.add("shap_explain", {
+    technical: predOk && shapOk ? "pass" : "fail",
+    functional: predOk && shapOk ? "pass" : "fail",
+    detail: `SHAP identity FD ${ev.shap_sum}+${ev.base}=${ev.raw}; CB ${ev2.shap_sum}+${ev2.base}=${ev2.raw}`,
+  });
+  const bad = await api("/api/models/predict", { method: "POST", body: JSON.stringify({ model_id: "no_such_model", features: {} }) });
+  if (bad.status < 400) card.remaining.push(`Unknown model_id should be 4xx, got ${bad.status}`);
+
+  // Plants on the test branch only
+  try {
+    await sql.query(`INSERT INTO ra_authorizations (auth_id, merchant_id, ts, amount, currency, method, scheme, status, recon_ref, is_synthetic)
+      VALUES ('FD-PLANT-1','MER_REGCLEAN','2026-10-21T11:00:00', 7777.00, 'INR','card','VISA','declined','FD-PLANT',1)
+      ON CONFLICT (auth_id) DO UPDATE SET status='declined', amount=7777.00`);
+    await sql.query(`INSERT INTO ra_auth_attributes (auth_id, decline_reason, is_emi, channel, is_synthetic)
+      VALUES ('FD-PLANT-1','do_not_honour',0,'pos',1)
+      ON CONFLICT (auth_id) DO UPDATE SET decline_reason='do_not_honour'`);
+    await sql.query(`SELECT public.refresh_ra_features()`);
+    await sql.query(`INSERT INTO ra_model_scores (subject_type, subject_id, model_id, version, score, raw_score, base_value, shap, top_factors, scored_at)
+      VALUES ('auth','FD-PLANT-1','false_decline','v9.0.0', 0.91, 2.3, 0, '[]'::jsonb, '[]'::jsonb, now())
+      ON CONFLICT (subject_type, subject_id, model_id) DO UPDATE SET score=0.91, raw_score=2.3, version='v9.0.0'`);
+    await sql.query(`INSERT INTO ra_captures (capture_id, auth_id, ts, amount, recon_ref, is_synthetic)
+      VALUES ('CAP-CB-PLANT-1','AUTH-REGCLEAN','2026-10-15T10:02:00', 4321.00, 'RC-CB-PLANT',1)
+      ON CONFLICT (capture_id) DO NOTHING`);
+    // A high chargeback score on a dedicated capture (does not change book leakage)
+    await sql.query(`INSERT INTO ra_model_scores (subject_type, subject_id, model_id, version, score, raw_score, base_value, shap, top_factors, scored_at)
+      VALUES ('capture','CAP-CB-PLANT-1','chargeback','v9.0.0', 0.80, 1.4, 0, '[]'::jsonb, '[]'::jsonb, now())
+      ON CONFLICT (subject_type, subject_id, model_id) DO UPDATE SET score=0.80`);
+    await sql.query(`INSERT INTO ra_model_scores (subject_type, subject_id, model_id, version, score, raw_score, base_value, shap, top_factors, scored_at)
+      VALUES ('settlement','SCH-IF-PLANT','iforest','v9.0.0', 0.88, 0.88, 0, '[]'::jsonb, '[]'::jsonb, now())
+      ON CONFLICT (subject_type, subject_id, model_id) DO UPDATE SET score=0.88, raw_score=0.88`);
+    await sql.query(`SELECT public.refresh_ra_v9()`);
+    const fdRow = (await sql.query(`SELECT * FROM v_ra_false_declines WHERE CAST(ref_id AS text) = 'FD-PLANT-1'`))[0];
+    const fdPass = Boolean(fdRow) && nearly(fdRow.leakage, 7777 * 0.91, 0.05);
+    card.add("recon_false_declines", {
+      functional: fdPass ? "pass" : "fail",
+      detail: fdPass ? `planted FD-PLANT-1 detected, leakage ₹${fdRow.leakage}` : `FD-PLANT-1 missing or leakage=${fdRow?.leakage}`,
+    });
+    const exp = (await sql.query(`SELECT chargeback_exposure FROM ra_ml_kpi WHERE id=1`))[0];
+    const cbPass = exp && Number(exp.chargeback_exposure) >= 4321 * 0.80 - 0.05;
+    card.add("chargebacks", {
+      functional: cbPass ? "pass" : (card.rows.find((r) => r.agent === "chargebacks")?.functional ?? "fail"),
+      detail: `high-risk exposure ₹${exp?.chargeback_exposure}; planted CAP-CB-PLANT-1 at p=0.80 contributes ₹${(4321*0.80).toFixed(2)}`,
+    });
+    const evIf = (await sql.query(`SELECT event_id, status FROM ra_anomaly_events WHERE event_id='IF-settlement-SCH-IF-PLANT'`))[0];
+    const ifPass = evIf && evIf.status === "open";
+    // idempotent sync
+    const n1 = (await sql.query(`SELECT COUNT(*)::int n FROM ra_anomaly_events WHERE metric LIKE 'iforest%'`))[0].n;
+    await sql.query(`SELECT public.sync_ra_iforest_anomalies()`);
+    await sql.query(`SELECT public.sync_ra_iforest_anomalies()`);
+    const n2 = (await sql.query(`SELECT COUNT(*)::int n FROM ra_anomaly_events WHERE metric LIKE 'iforest%'`))[0].n;
+    const idem = n1 === n2;
+    card.add("iforest", {
+      functional: ifPass ? "pass" : "fail",
+      technical: idem ? "pass" : "fail",
+      detail: `planted SCH-IF-PLANT ${ifPass ? "open" : "missing"}; iforest events ${n1}→${n2} after sync×2`,
+    });
+    // Seed any new case/category rows before the idempotency section snapshots counts.
+    await sql.query("SELECT public.refresh_ra_summaries()");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    card.add("recon_false_declines", { functional: "fail", detail: msg });
+    card.add("iforest", { functional: "fail", detail: msg });
+    card.remaining.push(`v9 plants: ${msg}`);
+  }
+}
+
 async function sectionPlaywright() {
   if (process.env.SKIP_PLAYWRIGHT === "1") {
     card.notes.push("Playwright skipped (SKIP_PLAYWRIGHT=1)");
@@ -518,6 +609,7 @@ const PAGES = [
   "/", "/lifecycle", "/agents", "/investigate", "/controls", "/trace", "/network-risk",
   "/contracts", "/anomalies", "/routing", "/ask", "/cases", "/risks", "/files",
   "/ingestion", "/review", "/authorization", "/scheme", "/bank", "/fees", "/aml", "/tax", "/kyc",
+  "/models", "/false-declines",
 ];
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const errors = [];
@@ -637,6 +729,8 @@ async function main() {
   await sectionKpiReconcile(sql);
   console.log("section: functional plants");
   await sectionFunctionalPlants(sql);
+  console.log("section: v9 models");
+  await sectionModels(sql);
   console.log("section: idempotency");
   await sectionIdempotency(sql);
   console.log("section: gates");

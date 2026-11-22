@@ -1,0 +1,10 @@
+# Offline-only. Not used in the Worker. Install into a local venv.
+numpy>=1.26
+pandas>=2.1
+scikit-learn>=1.4
+lightgbm>=4.3
+psycopg2-binary>=2.9
+# optional:
+# featuretools>=1.31
+# shap>=0.45
+# torch>=2.2

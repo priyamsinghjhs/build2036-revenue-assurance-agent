@@ -70,6 +70,10 @@ export const api = {
     }),
   routing: () => request<RoutingPayload>("/api/routing"),
   simulateRouting: () => request<RoutingPayload>("/api/routing/simulate", { method: "POST", body: "{}" }),
+  models: () => request<ModelsOverview>("/api/models"),
+  model: (id: string) => request<ModelDetail>(`/api/models/${encodeURIComponent(id)}`),
+  predict: (model_id: string, features: Record<string, number>) =>
+    request<ModelPredict>("/api/models/predict", { method: "POST", body: JSON.stringify({ model_id, features }) }),
   cases: async () => {
     const r = await request<{ cases: Record<string, unknown>[] }>("/api/cases");
     const now = Date.now();
@@ -257,6 +261,13 @@ export type IntelligenceKpis = {
   reviews_pending: number;
   ai_faithfulness: number;
   ai_unverified: number;
+  false_decline_n?: number;
+  false_decline_recovery?: number;
+  chargeback_exposure?: number;
+  iforest_open?: number;
+  retry_recovered?: number;
+  retry_uplift?: number;
+  models_version?: string;
 };
 
 export type ControlRow = {
@@ -359,6 +370,9 @@ export type ExceptionRow = {
   scheme: string | null;
   currency: string | null;
   severity: "high" | "medium" | "low";
+  score?: number | null;
+  top_factors?: { feature: string; value?: number; shap: number }[] | null;
+  model_id?: string | null;
 };
 
 export type Overview = {
@@ -418,6 +432,8 @@ export type ActionRow = {
   created_at: string;
   decided_at?: string | null;
   decision_note?: string | null;
+  chargeback_score?: number | null;
+  dispute_win_score?: number | null;
 };
 
 
@@ -475,6 +491,18 @@ export type RoutingPayload = {
   policies: { policy: string; n: number; approval_current: number; approval_sim: number; approval_uplift: number; uplift_lo: number; uplift_hi: number; fee_current: number; fee_sim: number; fee_savings: number }[];
   segments: { policy: string; segment_kind: string; segment: string; n: number; approval_uplift: number; fee_savings: number }[];
   note: string;
+  retry?: {
+    policy: string;
+    n_candidates: number;
+    approval_current: number;
+    approval_sim: number;
+    approval_uplift: number;
+    recovered: number;
+    fee_cost: number;
+    net_reward: number;
+    note?: string;
+  } | null;
+  retry_arms?: { policy: string; arm: string; n: number; p_approve: number; recovered: number; fee_cost: number }[];
 };
 
 export type CaseListItem = {
@@ -570,4 +598,60 @@ export type EvalQuality = {
   agents: { agent_id: string; n: number; faithfulness: number; hallucination_rate: number; retries: number; unverified: number }[];
   totals: { n: number; faithfulness: number; unverified: number; retries: number };
   note: string;
+};
+
+
+export type ModelCard = {
+  model_id: string;
+  version: string;
+  trained_at?: string;
+  algorithm: string;
+  n_train: number | null;
+  n_test: number | null;
+  auc: number | null;
+  pr_auc: number | null;
+  notes: string | null;
+  metrics?: Record<string, unknown>;
+  is_synthetic: number;
+  global_shap: { feature: string; mean_abs_shap: number; rank: number }[];
+};
+
+export type ModelsOverview = {
+  synthetic: boolean;
+  version: string;
+  note: string;
+  kpis: {
+    false_decline_n: number;
+    false_decline_recovery: number;
+    chargeback_exposure: number;
+    iforest_open: number;
+    retry_recovered: number;
+    retry_uplift: number;
+    models_version: string;
+  } | null;
+  cards: ModelCard[];
+  retry: { policy: Record<string, unknown> | null; arms: Record<string, unknown>[] };
+  drift: { model_id: string; half: string; n: number; mean_score: number; std_score: number }[];
+  bundled: string[];
+};
+
+export type ModelDetail = {
+  synthetic: boolean;
+  card: Record<string, unknown> | null;
+  global_shap: { feature: string; mean_abs_shap: number; rank: number }[];
+  top_scores: Record<string, unknown>[];
+  bundled: { version: string; algorithm: string; n_trees: number } | null;
+};
+
+export type ModelPredict = {
+  synthetic: boolean;
+  model_id: string;
+  version: string;
+  score: number;
+  raw: number;
+  base: number;
+  shap_sum: number;
+  check: boolean;
+  top: { feature: string; value: number; shap: number }[];
+  shap: { feature: string; value: number; shap: number }[];
 };

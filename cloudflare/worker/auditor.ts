@@ -289,6 +289,8 @@ export function buildAuditorSkeleton(
   const expected = num(facts, "expected_amount", "expected");
   const actual = num(facts, "actual_amount", "actual", "settled_amount");
   const leakage = num(facts, "leakage", "amount", "impact");
+  const cbScore = num(facts, "chargeback_score", "score");
+  const winScore = num(facts, "dispute_win_score");
 
   const amountPass =
     expected != null && actual != null && leakage != null
@@ -394,7 +396,33 @@ export function buildAuditorSkeleton(
       rationale: "A missing scheme or acquirer file is blocking sign-off. Raise an in-app data request; do not send it externally until a human approves.",
     });
   }
-  if (leakage != null && leakage > 0) {
+  if (area === "false_declines" || /false_decline/.test(category)) {
+    suggestions.push({
+      suggestion_id: suggestions.length ? `sug-${suggestions.length + 1}` : "sug-1",
+      action: "recover",
+      title: `Recover false-decline lost revenue${ref ? " for " + ref : ""}${leakage != null ? " (" + leakage + ")" : ""}`,
+      owner_team: "Auth ops",
+      priority: "high",
+      expected_recovery: leakage ?? 0,
+      maps_to: "action_queue",
+      rationale: "This soft decline was scored as recoverable lost revenue. The model score and SHAP drivers are stored; the LLM may only narrate those factors. A human must approve any retry or merchant outreach.",
+    });
+  }
+  if ((cbScore != null && cbScore >= 0.55) || area === "chargebacks") {
+    suggestions.push({
+      suggestion_id: `sug-${suggestions.length + 1}`,
+      action: "dispute_draft",
+      title: `Prioritise chargeback work${ref ? " for " + ref : ""}${cbScore != null ? " (risk " + cbScore.toFixed(2) + ")" : ""}`,
+      owner_team: "Scheme",
+      priority: cbScore != null && cbScore >= 0.7 ? "high" : "medium",
+      expected_recovery: leakage ?? 0,
+      maps_to: "draft_dispute",
+      rationale: winScore != null
+        ? `Chargeback risk is elevated. Dispute-win probability ${winScore.toFixed(2)} is illustrative (trained on 12 synthetic chargebacks). Draft stays in-app until a human approves export.`
+        : "Chargeback risk is elevated on the synthetic model. Draft a dispute in-app; nothing is sent until a human approves export.",
+    });
+  }
+  if (leakage != null && leakage > 0 && area !== "false_declines") {
     suggestions.push({
       suggestion_id: suggestions.length ? "sug-2" : "sug-1",
       action: leakage < 500 ? "write_off" : "recover",

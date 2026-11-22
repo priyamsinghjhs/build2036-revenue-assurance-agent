@@ -42,7 +42,12 @@ export default function AnomaliesPage() {
       </header>
       <div className="grid gap-3 sm:grid-cols-3">
         <KpiCard label="Open events" value={String(data.open_count ?? data.events.filter((e) => e.status === "open").length)} tone="warn" />
-        <KpiCard label="Featured sensors" value="4" hint="Approval, fee ratio, latency, refund/CB" />
+        <KpiCard
+          label="Isolation-forest open"
+          value={String(data.events.filter((e) => String(e.metric).startsWith("iforest") && e.status === "open").length)}
+          hint="Settlement fee / FX markup · deduped, never re-opened"
+          tone="warn"
+        />
         <KpiCard label="Cron behaviour" value="Top-1" hint="An open event triggers one investigation, inside the neuron budget" />
       </div>
       <Card>

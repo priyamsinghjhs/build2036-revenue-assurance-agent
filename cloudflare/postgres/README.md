@@ -37,6 +37,10 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f postgres/002_summaries.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f postgres/003_exec_automation.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f postgres/004_settlement_funding_acquirer.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f postgres/005_governance_risk.sql
+# later intelligence / model-store migrations:
+#   006_intelligence.sql 007_… through 011_model_intelligence.sql
+# Prefer: node scripts/_apply_neon.mjs postgres/011_model_intelligence.sql
+# (the helper never prints the connection string).
 
 # Then set the Worker secret (do not commit it) and deploy:
 # npx wrangler secret put DATABASE_URL

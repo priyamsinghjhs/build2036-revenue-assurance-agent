@@ -105,6 +105,7 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
       recon_network: ["network_risk"],
       recon_success: ["success"],
       recon_files: ["files"],
+      recon_false_declines: ["false_declines"],
       contract_extract: ["contracts"],
     };
     const areas = map[agentId] ?? (domain ? [domain as AreaId] : []);
@@ -164,6 +165,7 @@ export function systemPrompt(agentId: AgentId): string {
     recon_network: reconSchema("network_risk"),
     recon_success: reconSchema("success"),
     recon_files: reconSchema("files"),
+    recon_false_declines: reconSchema("false_declines"),
     contract_extract: reconSchema("contracts"),
     gap_detection: `{"severity":"critical|high|medium|low","themes":["short theme"],"priority_gaps":[{"exception_id":"","issue":"","amount":0,"priority":"high|medium|low"}],"narrative":"one sentence"}`,
     investigator: `{"root_cause":"short","evidence":["chip"],"affected":"who/what","confidence":80}` /* confidence is an integer 0-100 */,
@@ -370,9 +372,49 @@ export async function latestRun(db: AppDb, scope?: string) {
 export async function listActions(db: AppDb, limit = 50) {
   const { results } = await db
     .prepare("SELECT * FROM ra_action_queue ORDER BY created_at DESC LIMIT ?")
-    .bind(limit)
-    .all();
-  return results ?? [];
+    .bind(Math.max(limit, 80))
+    .all<Record<string, unknown>>();
+  const rows = results ?? [];
+  const refs = [...new Set(rows.map((r) => {
+    const id = String(r.exception_id ?? "");
+    const parts = id.split(":");
+    return parts.length >= 3 ? parts.slice(2).join(":") : id;
+  }).filter(Boolean))];
+  const scores = new Map<string, { chargeback_score: number; dispute_win_score: number }>();
+  if (refs.length) {
+    const ph = refs.map(() => "?").join(",");
+    const { results: sc } = await db
+      .prepare(
+        `SELECT subject_id, model_id, score FROM ra_model_scores
+         WHERE model_id IN ('chargeback','dispute_win') AND subject_id IN (${ph})`,
+      )
+      .bind(...refs)
+      .all<{ subject_id: string; model_id: string; score: number }>();
+    for (const s of sc ?? []) {
+      const cur = scores.get(s.subject_id) ?? { chargeback_score: 0, dispute_win_score: 0 };
+      if (s.model_id === "chargeback") cur.chargeback_score = Number(s.score);
+      if (s.model_id === "dispute_win") cur.dispute_win_score = Number(s.score);
+      scores.set(s.subject_id, cur);
+    }
+  }
+  const enriched = rows.map((r) => {
+    const id = String(r.exception_id ?? "");
+    const parts = id.split(":");
+    const ref = parts.length >= 3 ? parts.slice(2).join(":") : id;
+    const sc = scores.get(ref);
+    return {
+      ...r,
+      amount: r.amount,
+      chargeback_score: sc?.chargeback_score ?? null,
+      dispute_win_score: sc?.dispute_win_score ?? null,
+    };
+  });
+  enriched.sort((a, b) => {
+    const cb = Number(b.chargeback_score ?? 0) - Number(a.chargeback_score ?? 0);
+    if (cb) return cb;
+    return Number(b.amount ?? 0) - Number(a.amount ?? 0);
+  });
+  return enriched.slice(0, limit);
 }
 
 function sanitizeAgentOutput(output: Record<string, unknown>): Record<string, unknown> {

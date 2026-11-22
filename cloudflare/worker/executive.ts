@@ -56,6 +56,13 @@ export type ExecPayload = {
     reviews_pending: number;
     ai_faithfulness: number;
     ai_unverified: number;
+    false_decline_n: number;
+    false_decline_recovery: number;
+    chargeback_exposure: number;
+    iforest_open: number;
+    retry_recovered: number;
+    retry_uplift: number;
+    models_version: string;
   } | null;
 };
 
@@ -163,6 +170,7 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
 
   const gov = await db.prepare("SELECT * FROM ra_governance_kpi WHERE id = 1").first<Record<string, unknown>>();
   const intel = await db.prepare("SELECT * FROM ra_intel_kpi WHERE id = 1").first<Record<string, unknown>>();
+  const ml = await db.prepare("SELECT * FROM ra_ml_kpi WHERE id = 1").first<Record<string, unknown>>();
   const reviews = await db.prepare(`SELECT COUNT(*)::int AS n FROM (SELECT DISTINCT exception_id FROM v_ra_review_queue WHERE review_status='pending') q`).first<{ n: number }>();
   let evals: { faith: number; unverified: number } = { faith: 0, unverified: 0 };
   try {
@@ -250,6 +258,13 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
           reviews_pending: Number(reviews?.n ?? 0),
           ai_faithfulness: Number(evals.faith ?? 0),
           ai_unverified: Number(evals.unverified ?? 0),
+          false_decline_n: Number(ml?.false_decline_n ?? 0),
+          false_decline_recovery: Number(ml?.false_decline_recovery ?? 0),
+          chargeback_exposure: Number(ml?.chargeback_exposure ?? 0),
+          iforest_open: Number(ml?.iforest_open ?? 0),
+          retry_recovered: Number(ml?.retry_recovered ?? 0),
+          retry_uplift: Number(ml?.retry_uplift ?? 0),
+          models_version: String(ml?.models_version ?? "untrained"),
         }
       : null,
   };
