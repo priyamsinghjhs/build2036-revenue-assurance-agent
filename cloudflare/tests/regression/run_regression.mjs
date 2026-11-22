@@ -758,17 +758,21 @@ async function sectionInvestigateCfg003() {
   const invOk = inv.ok && (inv.body.output?.root_cause || inv.body.output?.summary) && inv.ms < 20000;
   const actOk = act.ok && Array.isArray(act.body.output?.actions) && act.ms < 20000;
   const checks = aud.body?.output?.checks;
+  const cfo = String(aud.body?.output?.cfo_one_liner ?? "");
+  const verdict = String(aud.body?.output?.verdict ?? "");
+  const cfoMatches = verdict === "approved" || !/ready to sign off/i.test(cfo);
   const audOk = aud.ok
     && Array.isArray(checks)
     && checks.length === 6
     && aud.body.output.source === "deterministic"
     && (aud.body.output.verdict === "needs_review" || aud.body.output.signoff === "needs_review")
+    && cfoMatches
     && aud.ms < 20000;
   card.add("investigator", { functional: invOk ? "pass" : "fail", detail: `CFG-003 investigator ${inv.status} ${inv.ms}ms` });
   card.add("action", { functional: actOk ? "pass" : "fail", detail: `CFG-003 action ${act.status} ${act.ms}ms actions=${act.body?.output?.actions?.length ?? 0}` });
   card.add("auditor", {
     functional: audOk && done.ok ? "pass" : "fail",
-    detail: `CFG-003 auditor fallback checks=${checks?.length ?? 0} source=${aud.body?.output?.source} verdict=${aud.body?.output?.verdict} ${aud.ms}ms complete=${done.status}`,
+    detail: `CFG-003 auditor fallback checks=${checks?.length ?? 0} source=${aud.body?.output?.source} verdict=${aud.body?.output?.verdict} cfo=${cfo} ${aud.ms}ms complete=${done.status}`,
   });
 }
 
@@ -776,10 +780,11 @@ async function sectionTypecheck() {
   const { spawnSync } = await import("node:child_process");
   const tscW = spawnSync("npx", ["tsc", "-p", "tsconfig.worker.json", "--noEmit"], { cwd: ROOT, encoding: "utf8" });
   const tscA = spawnSync("npx", ["tsc", "-p", "tsconfig.app.json", "--noEmit"], { cwd: ROOT, encoding: "utf8" });
-  const ok = tscW.status === 0 && tscA.status === 0;
-  card.notes.push(`Typecheck worker ${tscW.status === 0 ? "ok" : "FAIL"} frontend ${tscA.status === 0 ? "ok" : "FAIL"}`);
+  const cfo = spawnSync("npx", ["tsx", "tests/auditor-cfo.test.ts"], { cwd: ROOT, encoding: "utf8" });
+  const ok = tscW.status === 0 && tscA.status === 0 && cfo.status === 0;
+  card.notes.push(`Typecheck worker ${tscW.status === 0 ? "ok" : "FAIL"} frontend ${tscA.status === 0 ? "ok" : "FAIL"}; auditor CFO test ${cfo.status === 0 ? "ok" : "FAIL"}`);
   if (!ok) {
-    card.remaining.push(`Typecheck failed:\n${(tscW.stdout + tscW.stderr + tscA.stdout + tscA.stderr).slice(0, 800)}`);
+    card.remaining.push(`Typecheck/CFO test failed:\n${(tscW.stdout + tscW.stderr + tscA.stdout + tscA.stderr + cfo.stdout + cfo.stderr).slice(0, 800)}`);
   }
   return ok;
 }

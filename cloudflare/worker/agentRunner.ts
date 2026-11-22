@@ -16,7 +16,7 @@ import type { Env } from "./types";
 import { getDb, type AppDb } from "./pg";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import { checkGrounding, retryPrompt } from "./grounding";
-import { AUDITOR_SCHEMA, finalizeAuditorOutput } from "./auditor";
+import { AUDITOR_SCHEMA, alignCfoToVerdict, finalizeAuditorOutput } from "./auditor";
 
 const JSON_HINT = "Reply with compact JSON only. No markdown fences, no prose outside JSON.";
 
@@ -219,6 +219,7 @@ function deterministicStepOutput(
     out.source = "deterministic";
     out.verdict = "needs_review";
     out.signoff = "needs_review";
+    alignCfoToVerdict(out);
     const note = `Deterministic auditor fallback (${reason}). The LLM step did not complete or was unavailable. Routed to human review.`;
     out.compliance_notes = `${note} ${String(out.compliance_notes ?? "")}`.trim();
     out.rationale = String(out.rationale ?? note);
@@ -270,6 +271,7 @@ export async function runAgentStep(
       output.source = "deterministic";
       output.verdict = "needs_review";
       output.signoff = "needs_review";
+      output = alignCfoToVerdict(output as import("./auditor").AuditorOutput) as Record<string, unknown>;
     }
     grounding = checkGrounding(output, user);
   } else {
@@ -282,6 +284,7 @@ export async function runAgentStep(
           output.source = "deterministic";
           output.verdict = "needs_review";
           output.signoff = "needs_review";
+          output = alignCfoToVerdict(output as import("./auditor").AuditorOutput) as Record<string, unknown>;
         }
         break;
       }
@@ -318,6 +321,7 @@ export async function runAgentStep(
           output.source = "deterministic";
           output.verdict = "needs_review";
           output.signoff = "needs_review";
+          output = alignCfoToVerdict(output as import("./auditor").AuditorOutput) as Record<string, unknown>;
         }
         break;
       }
@@ -332,6 +336,7 @@ export async function runAgentStep(
       output = finalizeAuditorOutput(output, input, briefPriors, grounding);
       output.verdict = "needs_review";
       output.signoff = "needs_review";
+      output = alignCfoToVerdict(output as import("./auditor").AuditorOutput) as Record<string, unknown>;
       const reason = `Grounding check failed after ${retries} rework(s): ${(output.unsupported_claims as string[]).join(", ")}. Treat as unverified, not as fact.`;
       output.compliance_notes = `${String(output.compliance_notes ?? "")} ${reason}`.trim();
       output.rationale = String(output.rationale ?? output.compliance_notes);

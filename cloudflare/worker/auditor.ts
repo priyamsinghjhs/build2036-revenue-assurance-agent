@@ -157,6 +157,32 @@ function mapVerdict(raw: unknown): AuditorOutput["verdict"] | null {
   return VERDICTS.has(s) ? (s as AuditorOutput["verdict"]) : null;
 }
 
+/** Rewrite a CFO line so it never says 'ready to sign off' unless the verdict is approved. */
+export function cfoLineForVerdict(
+  verdict: AuditorOutput["verdict"],
+  who: string,
+  leakage?: number | null,
+): string {
+  const subject = who.trim() || "this exception";
+  const leak = leakage != null && Number.isFinite(Number(leakage)) ? `, leakage ${leakage}` : "";
+  if (verdict === "approved") return `Auditor is ready to sign off ${subject}${leak}.`;
+  if (verdict === "rejected") return `Auditor rejected ${subject}${leak}.`;
+  return `Auditor needs review on ${subject}${leak}.`;
+}
+
+export function alignCfoToVerdict(out: AuditorOutput): AuditorOutput {
+  const verdict = out.verdict;
+  const cfo = String(out.cfo_one_liner ?? "");
+  if (verdict === "approved") return out;
+  if (/ready to sign off/i.test(cfo)) {
+    const m = cfo.match(/ready to sign off\s+(.+?)(?:,\s*leakage\s+([^.,]+))?\s*\.?$/i);
+    const who = (m?.[1] ?? "this exception").trim().replace(/[.,]$/, "");
+    const leakRaw = m?.[2] != null ? Number(String(m[2]).replace(/,/g, "")) : NaN;
+    out.cfo_one_liner = cfoLineForVerdict(verdict, who, Number.isFinite(leakRaw) ? leakRaw : null);
+  }
+  return out;
+}
+
 export function isValidAuditorShape(raw: Record<string, unknown>): boolean {
   const verdict = mapVerdict(raw.verdict ?? raw.signoff);
   if (!verdict) return false;
@@ -236,7 +262,7 @@ export function normalizeAuditorOutput(raw: Record<string, unknown>, fallback?: 
 
   const rationale = asStr(raw.rationale ?? raw.compliance_notes ?? raw.summary, base.rationale);
   const cfo = asStr(raw.cfo_one_liner ?? raw.one_liner, base.cfo_one_liner);
-  return {
+  const out: AuditorOutput = {
     ...raw,
     verdict,
     signoff: verdict === "approved" ? "ready" : verdict,
@@ -250,6 +276,7 @@ export function normalizeAuditorOutput(raw: Record<string, unknown>, fallback?: 
     schema_valid: isValidAuditorShape(raw) && checks.length === 6,
     source: isValidAuditorShape(raw) ? "llm" : "deterministic",
   };
+  return alignCfoToVerdict(out);
 }
 
 function emptySkeleton(): AuditorOutput {
@@ -508,7 +535,7 @@ export function finalizeAuditorOutput(
       g.evidence = `Grounding check failed: ${grounding.unsupported.map((c) => `${c.kind}:${c.value}`).join(", ")}. Do not treat as fact.`;
     }
   }
-  return out;
+  return alignCfoToVerdict(out);
 }
 
 export async function listSuggestionDecisions(db: AppDb, exceptionId: string) {
