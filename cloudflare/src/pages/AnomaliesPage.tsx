@@ -41,7 +41,7 @@ export default function AnomaliesPage() {
         <p className="text-sm text-muted">{data.note}</p>
       </header>
       <div className="grid gap-3 sm:grid-cols-3">
-        <KpiCard label="Open events" value={String(data.events.length)} tone="warn" />
+        <KpiCard label="Open events" value={String(data.open_count ?? data.events.filter((e) => e.status === "open").length)} tone="warn" />
         <KpiCard label="Featured sensors" value="4" hint="Approval, fee ratio, latency, refund/CB" />
         <KpiCard label="Cron behaviour" value="Top-1" hint="An open event triggers one investigation, inside the neuron budget" />
       </div>
@@ -53,17 +53,18 @@ export default function AnomaliesPage() {
         <CardContent className="overflow-x-auto">
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="text-[11px] uppercase tracking-wide text-muted"><tr>
-              <th className="pb-2 pr-3">Event</th><th className="pb-2 pr-3">Day</th><th className="pb-2 pr-3 text-right">Value</th><th className="pb-2 pr-3 text-right">z</th><th className="pb-2 pr-3 text-right">Impact</th><th className="pb-2">Action</th>
+              <th className="pb-2 pr-3">Event</th><th className="pb-2 pr-3">Day</th><th className="pb-2 pr-3">Status</th><th className="pb-2 pr-3 text-right">Value</th><th className="pb-2 pr-3 text-right">z</th><th className="pb-2 pr-3 text-right">Impact</th><th className="pb-2">Action</th>
             </tr></thead>
             <tbody>
               {data.events.map((e) => (
                 <tr key={e.event_id} className="border-t border-line">
                   <td className="py-2 pr-3">{e.metric.replace(/_/g," ")} · {e.segment}</td>
                   <td className="py-2 pr-3">{String(e.day).slice(0,10)}</td>
+                  <td className="py-2 pr-3 capitalize">{e.status}</td>
                   <td className="py-2 pr-3 text-right tabular-nums">{Number(e.value).toFixed(3)}</td>
                   <td className="py-2 pr-3 text-right tabular-nums">{Number(e.zscore||0).toFixed(2)}</td>
                   <td className="py-2 pr-3 text-right tabular-nums">{inr(Number(e.impact||0), true)}</td>
-                  <td className="py-2"><Button size="sm" disabled={busy} onClick={() => void investigate(String(e.event_id))}>Investigate</Button></td>
+                  <td className="py-2">{e.status === "open" ? <Button size="sm" disabled={busy} onClick={() => void investigate(String(e.event_id))}>Investigate</Button> : <span className="text-xs text-muted">—</span>}</td>
                 </tr>
               ))}
             </tbody>

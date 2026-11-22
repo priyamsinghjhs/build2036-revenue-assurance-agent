@@ -325,8 +325,13 @@ async function embedQuery(env: Env, text: string): Promise<string> {
 
 export async function listAnomalies(db: AppDb) {
   const { results: events } = await db
-    .prepare("SELECT * FROM ra_anomaly_events ORDER BY ABS(COALESCE(zscore,0)) DESC, impact DESC")
+    .prepare(
+      `SELECT * FROM ra_anomaly_events
+        WHERE status IN ('open', 'investigated')
+        ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, ABS(COALESCE(zscore,0)) DESC, impact DESC`,
+    )
     .all<Record<string, unknown>>();
+  const open_count = (events ?? []).filter((e) => e.status === "open").length;
   const { results: series } = await db
     .prepare(
       `SELECT metric, segment, to_char(day,'YYYY-MM-DD') AS day, value, ewma, band_lo, band_hi, zscore, is_anomaly, volume
@@ -335,8 +340,9 @@ export async function listAnomalies(db: AppDb) {
     .all<Record<string, unknown>>();
   return {
     events: events ?? [],
+    open_count,
     series: series ?? [],
-    note: "A temporal autoencoder can be trained offline later (for example in Colab) and plugged in as an additional sensor. This page uses rolling z-score and EWMA bands computed in Postgres only.",
+    note: "Featured events are the four injected seeds on the synthetic October book (UPI approval, ICICI settlement latency, Visa fee ratio, book-wide refund/CB). Refresh is idempotent by (metric, segment, day) and does not re-open investigated, resolved, or acknowledged events. A temporal autoencoder can be trained offline later and plugged in as an additional sensor. This page uses rolling z-score and EWMA bands computed in Postgres only.",
   };
 }
 

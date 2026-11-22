@@ -449,6 +449,7 @@ export type DocumentDetail = {
 
 export type AnomalyPayload = {
   events: { event_id: string; metric: string; segment: string; day: string; value: number; zscore: number; impact: number; status: string }[];
+  open_count: number;
   series: { metric: string; segment: string; day: string; value: number; ewma: number; band_lo: number; band_hi: number; zscore: number; is_anomaly: number; volume: number }[];
   note: string;
 };

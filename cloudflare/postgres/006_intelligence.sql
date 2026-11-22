@@ -119,6 +119,7 @@ CREATE TABLE ra_anomaly_events (
   status TEXT NOT NULL DEFAULT 'open',
   is_synthetic INT NOT NULL DEFAULT 1
 );
+CREATE UNIQUE INDEX ra_anomaly_events_signal_entity_period ON ra_anomaly_events (metric, segment, day);
 
 CREATE TABLE ra_auth_routing (
   auth_id TEXT PRIMARY KEY,
@@ -904,6 +905,58 @@ SELECT * FROM oos;
 -- ---------------------------------------------------------------------------
 -- Refresh v7 aggregates
 -- ---------------------------------------------------------------------------
+
+-- Idempotent featured-event sync: one row per (metric, segment, day).
+-- Never deletes or re-opens investigated / resolved / acknowledged / closed events.
+CREATE OR REPLACE FUNCTION public.sync_ra_anomaly_events()
+RETURNS void
+LANGUAGE plpgsql
+AS $sync$
+BEGIN
+  INSERT INTO ra_anomaly_events (event_id, metric, segment, day, value, zscore, impact, note, status, is_synthetic)
+  SELECT
+    'ANOM-' || m.metric || '-' || m.segment || '-' || to_char(m.day, 'YYYYMMDD'),
+    m.metric, m.segment, m.day, m.value, m.zscore,
+    CASE m.metric
+      WHEN 'fee_ratio' THEN COALESCE(m.volume,0) * ABS(m.value - COALESCE(m.baseline,m.value)) / 10000
+      WHEN 'approval_rate' THEN COALESCE(m.volume,0) * ABS(m.value - COALESCE(m.baseline,m.value))
+      WHEN 'settlement_latency' THEN COALESCE(m.volume,0) * 0.001 * GREATEST(m.value,0)
+      ELSE COALESCE(m.volume,0) * ABS(m.value - COALESCE(m.baseline,0))
+    END,
+    CASE m.metric
+      WHEN 'approval_rate' THEN 'Approval rate outside the EWMA band'
+      WHEN 'fee_ratio' THEN 'Scheme fee/volume ratio spike'
+      WHEN 'settlement_latency' THEN 'Settlement latency vs expected date'
+      WHEN 'refund_cb_ratio' THEN 'Refund and chargeback ratio spike'
+      ELSE 'Hop volume anomaly'
+    END,
+    'open', 1
+  FROM ra_metric_daily m
+  WHERE (m.metric, m.segment, m.day) IN (
+    ('approval_rate','UPI', DATE '2026-10-18'),
+    ('settlement_latency','ACQ-ICICI', DATE '2026-10-22'),
+    ('fee_ratio','VISA', DATE '2026-10-12'),
+    ('refund_cb_ratio','ALL', DATE '2026-10-27')
+  )
+  ON CONFLICT (event_id) DO UPDATE SET
+    value = EXCLUDED.value,
+    zscore = EXCLUDED.zscore,
+    impact = EXCLUDED.impact,
+    note = EXCLUDED.note
+  WHERE ra_anomaly_events.status = 'open';
+
+  UPDATE ra_anomaly_events e
+     SET status = 'closed'
+   WHERE e.status = 'open'
+     AND (e.metric, e.segment, e.day) NOT IN (
+       ('approval_rate','UPI', DATE '2026-10-18'),
+       ('settlement_latency','ACQ-ICICI', DATE '2026-10-22'),
+       ('fee_ratio','VISA', DATE '2026-10-12'),
+       ('refund_cb_ratio','ALL', DATE '2026-10-27')
+     );
+END;
+$sync$;
+
 CREATE OR REPLACE FUNCTION public.refresh_ra_v7()
 RETURNS void
 LANGUAGE plpgsql
@@ -1073,33 +1126,8 @@ BEGIN
     ('refund_cb_ratio','ALL', DATE '2026-10-27')
   );
 
-  DELETE FROM ra_anomaly_events WHERE investigated_run IS NULL;
-  INSERT INTO ra_anomaly_events (event_id, metric, segment, day, value, zscore, impact, note, status, is_synthetic)
-  SELECT
-    'ANOM-' || metric || '-' || segment || '-' || to_char(day, 'YYYYMMDD'),
-    metric, segment, day, value, zscore,
-    CASE metric
-      WHEN 'fee_ratio' THEN COALESCE(volume,0) * ABS(value - COALESCE(baseline,value)) / 10000
-      WHEN 'approval_rate' THEN COALESCE(volume,0) * ABS(value - COALESCE(baseline,value))
-      WHEN 'settlement_latency' THEN COALESCE(volume,0) * 0.001 * GREATEST(value,0)
-      ELSE COALESCE(volume,0) * ABS(value - COALESCE(baseline,0))
-    END,
-    CASE metric
-      WHEN 'approval_rate' THEN 'Approval rate outside the EWMA band'
-      WHEN 'fee_ratio' THEN 'Scheme fee/volume ratio spike'
-      WHEN 'settlement_latency' THEN 'Settlement latency vs expected date'
-      WHEN 'refund_cb_ratio' THEN 'Refund and chargeback ratio spike'
-      ELSE 'Hop volume anomaly'
-    END,
-    'open', 1
-  FROM ra_metric_daily
-  WHERE is_anomaly = 1
-    AND (
-      metric IN ('approval_rate','fee_ratio','settlement_latency','refund_cb_ratio')
-      OR (metric = 'hop_volume' AND ABS(COALESCE(zscore,0)) >= 4)
-    )
-  ON CONFLICT (event_id) DO UPDATE SET
-    value = EXCLUDED.value, zscore = EXCLUDED.zscore, impact = EXCLUDED.impact, note = EXCLUDED.note;
+  -- Featured events only; idempotent; never re-open closed / investigated / resolved rows
+  PERFORM public.sync_ra_anomaly_events();
 
   INSERT INTO ra_area_series (area, series_type, points)
   SELECT 'anomalies', 'anomalies', COALESCE((
