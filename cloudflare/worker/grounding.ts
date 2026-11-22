@@ -1,0 +1,138 @@
+/**
+ * Deterministic grounding / faithfulness check for LLM agent outputs.
+ * Every number, amount, ID, date and merchant/entity in the output must appear
+ * in (or be derivable from) the context that was passed to the model.
+ * No extra LLM call is made here — an optional judge would spend free neurons.
+ */
+
+export type GroundingClaim = {
+  kind: "number" | "id" | "date" | "entity";
+  value: string;
+  supported: boolean;
+};
+
+export type GroundingResult = {
+  claims: number;
+  supported: number;
+  faithfulness: number;
+  unsupported: GroundingClaim[];
+  passed: boolean;
+};
+
+const GENERIC_NUM = new Set(["0", "0.0", "0.00", "0.0000", "1", "2", "3", "4", "5", "10", "100"]);
+const STOP_IDS = new Set([
+  "INR", "USD", "EUR", "SQL", "JSON", "HIGH", "LOW", "MEDIUM", "CRITICAL", "WATCH",
+  "GOOD", "POOR", "YES", "NO", "THE", "AND", "FOR", "FROM", "WITH", "CASE", "WHEN",
+  "THEN", "ELSE", "END", "CAST", "TRUE", "FALSE", "NULL", "UPI", "CARD", "NEFT",
+  "P2M", "P2P", "PPI", "GST", "TDS", "MDR", "SLA", "CFO", "RAG", "LLM", "API",
+]);
+
+function tokenizeContext(context: string): { text: string; numbers: number[] } {
+  const text = context.toUpperCase();
+  const numbers: number[] = [];
+  const re = /-?\d+(?:,\d{3})*(?:\.\d+)?/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(context))) {
+    const n = Number(m[0].replace(/,/g, ""));
+    if (Number.isFinite(n)) numbers.push(n);
+  }
+  const derived: number[] = [...numbers];
+  const cap = Math.min(numbers.length, 24);
+  for (let i = 0; i < cap; i++) {
+    for (let j = i + 1; j < cap; j++) {
+      derived.push(numbers[i] + numbers[j]);
+      derived.push(Math.abs(numbers[i] - numbers[j]));
+      derived.push(numbers[i] * numbers[j]);
+      if (numbers[j] !== 0) derived.push(numbers[i] / numbers[j]);
+      if (numbers[i] !== 0) derived.push(numbers[j] / numbers[i]);
+    }
+  }
+  return { text, numbers: derived };
+}
+
+function closeTo(n: number, pool: number[]): boolean {
+  for (const p of pool) {
+    if (Math.abs(p - n) <= 0.015) return true;
+    if (p !== 0 && Math.abs(p - n) / Math.abs(p) <= 0.002) return true;
+    // bps / percent forms: 0.0015 vs 15, 0.35 vs 35
+    if (Math.abs(p * 100 - n) <= 0.05 || Math.abs(p * 10000 - n) <= 0.5) return true;
+    if (Math.abs(n * 100 - p) <= 0.05 || Math.abs(n * 10000 - p) <= 0.5) return true;
+  }
+  return false;
+}
+
+function extractClaims(output: unknown): GroundingClaim[] {
+  const text = typeof output === "string" ? output : JSON.stringify(output);
+  const seen = new Set<string>();
+  const claims: GroundingClaim[] = [];
+  const add = (kind: GroundingClaim["kind"], value: string) => {
+    const key = `${kind}:${value.toUpperCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    claims.push({ kind, value, supported: false });
+  };
+
+  const numRe = /-?\d+(?:,\d{3})*(?:\.\d+)?/g;
+  let m: RegExpExecArray | null;
+  while ((m = numRe.exec(text))) {
+    const raw = m[0];
+    const n = Number(raw.replace(/,/g, ""));
+    if (!Number.isFinite(n)) continue;
+    const abs = Math.abs(n);
+    if (GENERIC_NUM.has(String(n)) || GENERIC_NUM.has(raw)) continue;
+    // skip lone years unless we treat them as dates below
+    if (abs >= 2020 && abs <= 2035 && !raw.includes(".")) continue;
+    // skip 0-100 integers that are likely confidence / rates when they have no decimals and are small
+    if (Number.isInteger(n) && abs <= 100 && !raw.includes(".")) continue;
+    add("number", raw.replace(/,/g, ""));
+  }
+
+  const dateRe = /\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})\b/gi;
+  while ((m = dateRe.exec(text))) add("date", m[0]);
+
+  const idRe = /\b(?:MER|CAP|ACQ|PAR|DOC|RULE|CTL|ANOM|CAN|TXN|UPI|INV|E2E|IPM|VISA|CAMT|ING|DRAFT|RSK|APM|TR)[A-Z0-9:_-]{2,}\b|\b[A-Z]{2,5}\d{3,}\b|\b[a-z]+(?::[a-z0-9_]+){2,}\b/gi;
+  while ((m = idRe.exec(text))) {
+    const v = m[0];
+    if (STOP_IDS.has(v.toUpperCase())) continue;
+    if (v.length < 4) continue;
+    add("id", v);
+  }
+
+  const entRe = /\b(?:PayStreet|QuickMart|HDFC|ICICI|RuPay|Mastercard|Visa|Innoviti|INTERMEDIARY-[A-Z]+)\b/gi;
+  while ((m = entRe.exec(text))) add("entity", m[0]);
+
+  return claims;
+}
+
+export function checkGrounding(output: unknown, context: unknown, threshold = 0.8): GroundingResult {
+  const ctxStr = typeof context === "string" ? context : JSON.stringify(context);
+  const { text, numbers } = tokenizeContext(ctxStr);
+  const claims = extractClaims(output);
+  for (const c of claims) {
+    if (c.kind === "number") {
+      const n = Number(c.value);
+      c.supported = closeTo(n, numbers) || text.includes(c.value.toUpperCase());
+    } else {
+      const needle = c.value.toUpperCase().replace(/-/g, "");
+      const hay = text.replace(/-/g, "");
+      c.supported = hay.includes(c.value.toUpperCase()) || hay.includes(needle);
+    }
+  }
+  const supported = claims.filter((c) => c.supported).length;
+  const faithfulness = claims.length === 0 ? 1 : supported / claims.length;
+  const unsupported = claims.filter((c) => !c.supported);
+  const critical = unsupported.filter((c) => c.kind === "id" || c.kind === "number" || c.kind === "entity");
+  const passed = faithfulness >= threshold && critical.length === 0;
+  return { claims: claims.length, supported, faithfulness, unsupported, passed };
+}
+
+export function retryPrompt(unsupported: GroundingClaim[]): string {
+  const list = unsupported.map((c) => `${c.kind} "${c.value}"`).join(", ");
+  return [
+    "GROUNDING REWORK: your previous JSON used claims that are not in the INPUT context:",
+    list || "(unspecified)",
+    "Rewrite the same schema using ONLY facts from INPUT.",
+    "If a number, ID, date or merchant is not in the context, write \"insufficient data\" and omit the invented value.",
+    "Do not invent or round-up figures. Return JSON only.",
+  ].join("\n");
+}

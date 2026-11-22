@@ -27,7 +27,11 @@ export type AreaId =
   | "interfaces"
   | "aml"
   | "network_risk"
-  | "success";
+  | "success"
+  | "contracts"
+  | "files"
+  | "anomalies"
+  | "clearing";
 
 export const AREA_META: Record<
   AreaId,
@@ -61,6 +65,10 @@ export const AREA_META: Record<
   aml: { label: "AML / fraud flags", group: "risk", blurb: "Rule-based structuring, refund abuse, round-tripping, velocity spikes, dormant bursts" },
   network_risk: { label: "Network risk", group: "risk", blurb: "Entity graph: shared accounts and devices, cycles, known-bad proximity, changed accounts" },
   success: { label: "Payment success rate", group: "lifecycle", blurb: "Approval and failure reasons by channel, acquirer and APM, including EMI" },
+  contracts: { label: "Contracts & rules", group: "governance", blurb: "Extracted contract rules, approvals, and SQL validation of rebates, tiers, fee changes and expired terms" },
+  files: { label: "File completeness", group: "lifecycle", blurb: "Missing and out-of-sequence scheme, bank and APM daily files" },
+  anomalies: { label: "Anomaly sensors", group: "risk", blurb: "Statistical z-score and EWMA detectors on latency, fee ratios, approval rates, refunds and hop volumes" },
+  clearing: { label: "Clearing & ingestion", group: "lifecycle", blurb: "Canonical settlement rows from camt.053, NPCI UPI, Mastercard IPM and Visa BASE II, with deterministic fee checks" },
 };
 
 export const AREA_IDS = Object.keys(AREA_META) as AreaId[];

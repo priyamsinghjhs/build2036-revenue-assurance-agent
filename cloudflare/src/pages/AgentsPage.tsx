@@ -8,10 +8,10 @@ import {
   type Node,
 } from "@xyflow/react";
 import { Play, RefreshCw } from "lucide-react";
-import { api, type ActionRow, type AutomationLog, type LatestRun, type Roster } from "@/api";
+import { api, type ActionRow, type AutomationLog, type EvalQuality, type LatestRun, type Roster } from "@/api";
 import { SeverityBadge, StatusDot } from "@/components/SeverityBadge";
 import { Button } from "@/components/ui/button";
-import { inr, prettyCat } from "@/lib/format";
+import { inr, prettyCat, pct } from "@/lib/format";
 import { publicErrorMessage } from "../../shared/errors";
 
 const DOMAINS = [
@@ -56,6 +56,7 @@ export default function AgentsPage() {
   const [runId, setRunId] = useState<string | null>(null);
   const [autoBusy, setAutoBusy] = useState(false);
   const [autoLog, setAutoLog] = useState<AutomationLog | null>(null);
+  const [quality, setQuality] = useState<EvalQuality | null>(null);
 
   const loadCached = useCallback(async (scope: string) => {
     const [{ latest: cached }, act] = await Promise.all([api.latest(scope), api.actions()]);
@@ -72,6 +73,10 @@ export default function AgentsPage() {
       setStatus(st);
       if (cached.outputs[0]) setActive(cached.outputs[0].agent_id);
     }
+  }, []);
+
+  useEffect(() => {
+    api.evalQuality().then(setQuality).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -235,6 +240,49 @@ export default function AgentsPage() {
         </div>
       </header>
       {error && <p className="text-sm text-danger">{error}</p>}
+      {quality && (
+        <section className="rounded-xl border border-line bg-white p-4">
+          <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-ink">AI quality</h2>
+              <p className="text-xs text-muted">{quality.note}</p>
+            </div>
+            <div className="text-xs text-muted">
+              Faithfulness {pct(quality.totals.faithfulness)} · {quality.totals.unverified} unverified · {quality.totals.retries} reworks · {quality.totals.n} scored outputs
+            </div>
+          </div>
+          {quality.agents.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px] text-left text-sm">
+                <thead className="text-[11px] uppercase tracking-wide text-muted">
+                  <tr>
+                    <th className="pb-2 pr-3">Agent</th>
+                    <th className="pb-2 pr-3 text-right">Outputs</th>
+                    <th className="pb-2 pr-3 text-right">Faithfulness</th>
+                    <th className="pb-2 pr-3 text-right">Hallucination</th>
+                    <th className="pb-2 pr-3 text-right">Reworks</th>
+                    <th className="pb-2 text-right">Unverified</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {quality.agents.map((a) => (
+                    <tr key={a.agent_id} className="border-t border-line">
+                      <td className="py-2 pr-3">{a.agent_id.replace(/_/g, " ")}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{a.n}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{pct(Number(a.faithfulness))}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{pct(Number(a.hallucination_rate))}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{a.retries}</td>
+                      <td className="py-2 text-right tabular-nums">{a.unverified}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-xs text-muted">Scores appear after an agent run. Unverified outputs are sent to the review queue and are not presented as fact.</p>
+          )}
+        </section>
+      )}
       {autoLog && (
         <p className="text-xs text-muted">
           Last automatic run: {String(autoLog.status)} at {new Date(autoLog.started_at).toLocaleString("en-IN", { timeZone: "Asia/Calcutta" })} IST

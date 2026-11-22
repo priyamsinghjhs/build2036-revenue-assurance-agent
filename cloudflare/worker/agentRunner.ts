@@ -15,6 +15,7 @@ import {
 import type { Env } from "./types";
 import { getDb, type AppDb } from "./pg";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
+import { checkGrounding, retryPrompt } from "./grounding";
 
 const JSON_HINT = "Reply with compact JSON only. No markdown fences, no prose outside JSON.";
 
@@ -102,6 +103,8 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
       recon_aml: ["aml"],
       recon_network: ["network_risk"],
       recon_success: ["success"],
+      recon_files: ["files"],
+      contract_extract: ["contracts"],
     };
     const areas = map[agentId] ?? (domain ? [domain as AreaId] : []);
     const summaries = [];
@@ -120,7 +123,9 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
   }
   if (exceptionId) {
     const ex = await getException(db, exceptionId);
-    return { task: "Investigate this single exception.", exception: ex, policy: await policyText(db, ex?.area ?? "synthetic") };
+    const { graphTools } = await import("./intel");
+    const graph = await graphTools(db, { merchant_id: ex?.merchant_id ?? undefined, exception_id: exceptionId }).catch(() => null);
+    return { task: "Investigate this single exception. Use the attached graph_tools results (paths, refund/chargeback rings, proximity) as evidence; do not invent graph edges.", exception: ex, graph_tools: graph, policy: await policyText(db, ex?.area ?? "synthetic") };
   }
   const top = await listExceptions(db, domain, 8);
   return {
@@ -157,6 +162,8 @@ export function systemPrompt(agentId: AgentId): string {
     recon_aml: reconSchema("aml"),
     recon_network: reconSchema("network_risk"),
     recon_success: reconSchema("success"),
+    recon_files: reconSchema("files"),
+    contract_extract: reconSchema("contracts"),
     gap_detection: `{"severity":"critical|high|medium|low","themes":["short theme"],"priority_gaps":[{"exception_id":"","issue":"","amount":0,"priority":"high|medium|low"}],"narrative":"one sentence"}`,
     investigator: `{"root_cause":"short","evidence":["chip"],"affected":"who/what","confidence":80}` /* confidence is an integer 0-100 */,
     action: `{"actions":[{"type":"dispute|recover|rebill|escalate|adjust|mark_known","target":"ref or merchant","amount":0,"currency":"INR","confidence":80,"rationale":"short"}]}`,
@@ -166,6 +173,7 @@ export function systemPrompt(agentId: AgentId): string {
     `You are the ${meta?.name} agent for a payment-acquiring revenue assurance platform.`,
     meta?.role ?? "",
     "SQL has already computed matches, variances and leakage. Only interpret the provided summaries.",
+    "Answer only from the provided INPUT context. If a fact is missing, say \"insufficient data\" — do not invent numbers, IDs, dates, merchants or amounts.",
     "Data is synthetic, for demo only. Be concise.",
     "confidence is an integer 0-100, not a 0-1 fraction. amounts are plain numbers (no currency symbols or words).",
     JSON_HINT,
@@ -185,22 +193,96 @@ export async function runAgentStep(
   const priors = await priorOutputs(getDb(env), opts.runId);
   const briefPriors = priors.slice(-4).map((p) => ({ agent: p.agent_id, output: p.output }));
   const user = JSON.stringify({ input, prior_agents: briefPriors }).slice(0, 6000);
-  const prompt = `${systemPrompt(opts.agentId)}\n\nINPUT:\n${user}`;
-  const raw = await complete(env.AI, prompt);
-  let output: Record<string, unknown>;
-  try {
-    output = parseJson(raw);
-  } catch {
-    output = { raw, parse_error: true };
+  const basePrompt = `${systemPrompt(opts.agentId)}\n\nINPUT:\n${user}`;
+  let output: Record<string, unknown> = {};
+  let grounding = checkGrounding({}, user);
+  let retries = 0;
+  const maxRetries = 2;
+  let prompt = basePrompt;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const raw = await complete(env.AI, prompt);
+    try {
+      output = parseJson(raw);
+    } catch {
+      output = { raw, parse_error: true };
+    }
+    output = sanitizeAgentOutput(output);
+    grounding = checkGrounding(output, user);
+    if (grounding.passed) break;
+    if (attempt === maxRetries) break;
+    retries += 1;
+    prompt = `${basePrompt}\n\n${retryPrompt(grounding.unsupported)}\n\nPREVIOUS_OUTPUT:\n${JSON.stringify(output).slice(0, 2000)}`;
   }
-  output = sanitizeAgentOutput(output);
+  const passed = grounding.passed;
+  output.verification = passed ? "grounded" : "unverified";
+  output.faithfulness = Math.round(grounding.faithfulness * 1000) / 1000;
+  if (!passed) {
+    output.unsupported_claims = grounding.unsupported.map((c) => `${c.kind}:${c.value}`);
+    if (opts.agentId === "auditor") {
+      output.signoff = "needs_review";
+      const reason = `Grounding check failed after ${retries} rework(s): ${(output.unsupported_claims as string[]).join(", ")}. Treat as unverified, not as fact.`;
+      output.compliance_notes = `${String(output.compliance_notes ?? "")} ${reason}`.trim();
+    }
+  }
   const outputId = crypto.randomUUID();
   const created = new Date().toISOString();
-  await getDb(env).prepare(
+  const db = getDb(env);
+  await db.prepare(
     "INSERT INTO ra_agent_outputs (output_id, run_id, agent_id, domain, output_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
   )
     .bind(outputId, opts.runId, opts.agentId, opts.domain ?? null, JSON.stringify(output), created)
     .run();
+  try {
+    await db
+      .prepare(
+        `INSERT INTO ra_eval_scores (eval_id, run_id, output_id, agent_id, faithfulness, claims, supported, retries, verification, unsupported, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        opts.runId,
+        outputId,
+        opts.agentId,
+        grounding.faithfulness,
+        grounding.claims,
+        grounding.supported,
+        retries,
+        passed ? "grounded" : "unverified",
+        JSON.stringify(grounding.unsupported),
+        created,
+      )
+      .run();
+  } catch {
+    /* table may not exist on a stale schema */
+  }
+  if (!passed && (opts.exceptionId || (opts.scope || "").startsWith("exception:"))) {
+    const exceptionId = opts.exceptionId || String(opts.scope).replace(/^exception:/, "");
+    if (opts.agentId !== "auditor") {
+      try {
+        await db
+          .prepare(
+            "INSERT INTO ra_agent_outputs (output_id, run_id, agent_id, domain, output_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .bind(
+            crypto.randomUUID(),
+            opts.runId,
+            "auditor",
+            opts.domain ?? null,
+            JSON.stringify({
+              signoff: "needs_review",
+              compliance_notes: `Upstream ${opts.agentId} output marked unverified after grounding rework. Unsupported: ${(output.unsupported_claims as string[]).join(", ")}. Do not treat as fact.`,
+              audit_points: ["Grounding / faithfulness check failed"],
+              cfo_one_liner: "An agent output could not be grounded in the SQL facts and needs human review.",
+              verification: "unverified",
+              faithfulness: output.faithfulness,
+            }),
+            created,
+          )
+          .run();
+      } catch { /* ignore duplicate-path errors */ }
+    }
+    void exceptionId;
+  }
 
   if (opts.agentId === "action") {
     const actions = Array.isArray(output.actions) ? (output.actions as Record<string, unknown>[]) : [];

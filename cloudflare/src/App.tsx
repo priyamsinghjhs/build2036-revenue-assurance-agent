@@ -42,6 +42,16 @@ import SystemMapPage from "@/pages/SystemMapPage";
 import ControlsPage from "@/pages/ControlsPage";
 import TracePage from "@/pages/TracePage";
 import NetworkRiskPage from "@/pages/NetworkRiskPage";
+import ContractsPage from "@/pages/ContractsPage";
+import AnomaliesPage from "@/pages/AnomaliesPage";
+import RoutingPage from "@/pages/RoutingPage";
+import AskPage from "@/pages/AskPage";
+import CasesPage from "@/pages/CasesPage";
+import RisksPage from "@/pages/RisksPage";
+import FilesPage from "@/pages/FilesPage";
+import IngestionPage from "@/pages/IngestionPage";
+import ReviewQueuePage from "@/pages/ReviewQueuePage";
+import ReviewPage from "@/pages/ReviewPage";
 import { FilterProvider, useFilters } from "@/filters";
 import { Select } from "@/components/ui/select";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -86,6 +96,19 @@ const GROUPS = [
     ],
   },
   {
+    label: "Intelligence",
+    items: [
+      { to: "/contracts", label: "Contracts & rules", icon: BookOpen },
+      { to: "/anomalies", label: "Anomalies", icon: ShieldAlert },
+      { to: "/routing", label: "Routing optimisation", icon: Waypoints },
+      { to: "/ask", label: "Ask your data", icon: Search },
+      { to: "/cases", label: "Cases", icon: Workflow },
+      { to: "/risks", label: "Risk library", icon: Shield },
+      { to: "/files", label: "File completeness", icon: FileSpreadsheet },
+      { to: "/ingestion", label: "File ingestion", icon: Radio },
+    ],
+  },
+  {
     label: "Risk",
     items: [
       { to: "/tax", label: "Tax & regulatory", icon: Scale },
@@ -108,6 +131,7 @@ const GROUPS = [
     items: [
       { to: "/agents", label: "Agents & queue", icon: Bot },
       { to: "/investigate", label: "Investigate", icon: Search },
+      { to: "/review", label: "Review queue", icon: Scale },
       { to: "/trace", label: "Transaction trace", icon: ScanSearch },
     ],
   },
@@ -158,6 +182,13 @@ function Breadcrumb() {
         { to: "/", label: "Executive" },
         { to: "/investigate", label: "Investigate" },
         { to: pathname, label: "Exception" },
+      ];
+    }
+    if (pathname.startsWith("/review/")) {
+      return [
+        { to: "/", label: "Executive" },
+        { to: "/review", label: "Review queue" },
+        { to: pathname, label: "Human review" },
       ];
     }
     const title = TITLES[pathname] ?? pathname.replace("/", "") ?? "Page";
@@ -267,6 +298,16 @@ function Shell() {
             <Route path="/controls" element={<ControlsPage />} />
             <Route path="/trace" element={<TracePage />} />
             <Route path="/network-risk" element={<NetworkRiskPage />} />
+            <Route path="/contracts" element={<ContractsPage />} />
+            <Route path="/anomalies" element={<AnomaliesPage />} />
+            <Route path="/routing" element={<RoutingPage />} />
+            <Route path="/ask" element={<AskPage />} />
+            <Route path="/cases" element={<CasesPage />} />
+            <Route path="/risks" element={<RisksPage />} />
+            <Route path="/files" element={<FilesPage />} />
+            <Route path="/ingestion" element={<IngestionPage />} />
+            <Route path="/review" element={<ReviewQueuePage />} />
+            <Route path="/review/:id" element={<ReviewPage />} />
             <Route path="/:slug" element={<AreaPage />} />
           </Routes>
         </main>

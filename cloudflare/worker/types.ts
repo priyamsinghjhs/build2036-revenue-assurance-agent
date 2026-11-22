@@ -1,5 +1,5 @@
 export const MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
-export const TEMPERATURE = 0.1;
+export const TEMPERATURE = 0;
 // Workers AI defaults max_tokens to 256, which would truncate evidence / CFO summaries.
 export const MAX_TOKENS = 1024;
 
