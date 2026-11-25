@@ -7,6 +7,7 @@
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import type { AppDb } from "./pg";
 import type { GroundingResult } from "./grounding";
+import { checkGrounding, SENTENCE_TAG_RE } from "./grounding";
 import { inrExact } from "../shared/money";
 
 export const AUDIT_CHECK_NAMES = [
@@ -55,8 +56,8 @@ export const AUDITOR_SCHEMA = `{
   "findings":[{"issue":"short","severity":"high|medium|low","impact":0}],
   "suggestions":[{"suggestion_id":"sug-1","action":"request_file|recover|dispute_draft|data_request_draft|adjust_rule|escalate|write_off","title":"short concrete next step","owner_team":"Scheme|Finance|Tax|Ops|Compliance","priority":"high|medium|low","expected_recovery":0,"maps_to":"action_queue|draft_dispute|draft_data_request|case","rationale":"short","kind":"fact|recommendation","citation":"₹ amount or ID from INPUT, or omit and tag recommendation"}],
   "confidence":80,
-  "rationale":"one short paragraph",
-  "cfo_one_liner":"one sentence"
+  "rationale":"one short paragraph; cite INPUT figures, or start the sentence with Hypothesis: or Recommendation:",
+  "cfo_one_liner":"one sentence that cites a figure or ID from INPUT"
 }`;
 
 const VERDICTS = new Set(["approved", "needs_review", "rejected"]);
@@ -470,7 +471,7 @@ export function buildAuditorSkeleton(
         priority: "high",
         expected_recovery: short,
         maps_to: "action_queue",
-        rationale: `The payout was short of the expected net${expected != null && actual != null ? ` (${inrExact(expected)} expected versus ${inrExact(actual)} paid)` : ""}. Recover the difference from this payout run. A human must accept the proposal before anything is sent.`,
+        rationale: `The payout was short of the expected net (${expected != null && actual != null ? `${inrExact(expected)} expected versus ${inrExact(actual)} paid, ` : ""}leakage ${inrExact(short)} on ${ref || exceptionId || "this payout"}). Recover ${inrExact(short)} from this payout run. A human must accept the proposal before anything is sent.`,
       },
       {
         suggestion_id: "sug-2",
@@ -480,7 +481,7 @@ export function buildAuditorSkeleton(
         priority: "high",
         expected_recovery: 0,
         maps_to: "action_queue",
-        rationale: "Hypothesis: an incorrect reserves calculation may explain the shortfall. Recalculate the held reserve against the payout policy and post a correction. This cause is not proven by the exception facts alone.",
+        rationale: `Hypothesis: an incorrect reserves calculation may explain the shortfall of ${inrExact(short)} on ${ref || exceptionId || "this payout"}. Recalculate the held reserve against the payout policy and post a correction. This cause is not proven by the exception facts alone.`,
       },
       {
         suggestion_id: "sug-3",
@@ -490,7 +491,7 @@ export function buildAuditorSkeleton(
         priority: "medium",
         expected_recovery: short,
         maps_to: "action_queue",
-        rationale: `If the shortfall cannot be recovered from this run, add ${inrExact(short)} to the next merchant payout after a human approves the adjustment.`,
+        rationale: `Recommendation: if the shortfall of ${inrExact(short)} on ${ref || exceptionId || "this payout"} cannot be recovered from this run, add ${inrExact(short)} to the next merchant payout after a human approves the adjustment.`,
       },
     );
   }
@@ -503,7 +504,7 @@ export function buildAuditorSkeleton(
       priority: "high",
       expected_recovery: 0,
       maps_to: "action_queue",
-      rationale: "A missing scheme or acquirer file is blocking sign-off. Raise an in-app data request; do not send it externally until a human approves.",
+      rationale: `Recommendation: a missing scheme or acquirer file is blocking sign-off for ${ref || exceptionId}. Raise an in-app data request; do not send it externally until a human approves.`,
     });
   }
   if (area === "false_declines" || /false_decline/.test(category)) {
@@ -515,7 +516,7 @@ export function buildAuditorSkeleton(
       priority: "high",
       expected_recovery: leakage ?? 0,
       maps_to: "action_queue",
-      rationale: "This soft decline was scored as recoverable lost revenue. The model score and SHAP drivers are stored; the LLM may only narrate those factors. A human must approve any retry or merchant outreach.",
+      rationale: `This soft decline was scored as recoverable lost revenue of ${inrExact(leakage ?? 0)} on ${ref || exceptionId || "this decline"}. The model score and SHAP drivers are stored; the LLM may only narrate those factors. A human must approve any retry or merchant outreach.`,
     });
   }
   if ((cbScore != null && cbScore >= 0.55) || area === "chargebacks") {
@@ -528,8 +529,8 @@ export function buildAuditorSkeleton(
       expected_recovery: leakage ?? 0,
       maps_to: "draft_dispute",
       rationale: winScore != null
-        ? `Chargeback risk is elevated. Dispute-win probability ${winScore.toFixed(2)} is illustrative (trained on 12 synthetic chargebacks). Draft stays in-app until a human approves export.`
-        : "Chargeback risk is elevated on the synthetic model. Draft a dispute in-app; nothing is sent until a human approves export.",
+        ? `Recommendation: chargeback risk is elevated${cbScore != null ? ` (score ${cbScore.toFixed(2)})` : ""} on ${ref || exceptionId}${leakage != null ? `, leakage ${inrExact(leakage)}` : ""}. Dispute-win probability ${winScore.toFixed(2)} is illustrative. Draft stays in-app until a human approves export.`
+        : `Recommendation: chargeback risk is elevated${cbScore != null ? ` (score ${cbScore.toFixed(2)})` : ""} on ${ref || exceptionId}${leakage != null ? `, leakage ${inrExact(leakage)}` : ""}. Draft a dispute in-app; nothing is sent until a human approves export.`,
     });
   }
   if (!underPayout && leakage != null && leakage > 0 && area !== "false_declines") {
@@ -544,8 +545,8 @@ export function buildAuditorSkeleton(
       expected_recovery: leakage < 500 ? 0 : leakage,
       maps_to: "action_queue",
       rationale: leakage < 500
-        ? "The amount is below the logged write-off threshold. A human must still accept the proposal."
-        : "Recover the leakage computed in the SQL facts. The Action Queue item stays proposed until approved.",
+        ? `Recommendation: write off ${inrExact(leakage)} on ${ref || exceptionId || "this exception"} (below the logged write-off threshold). A human must still accept the proposal.`
+        : `Recover the leakage of ${inrExact(leakage)} on ${ref || exceptionId || "this exception"} computed in the SQL facts. The Action Queue item stays proposed until approved.`,
     });
   }
   if (!underPayout && (missingFile || (leakage != null && leakage >= 1000))) {
@@ -557,7 +558,7 @@ export function buildAuditorSkeleton(
       priority: "medium",
       expected_recovery: leakage ?? 0,
       maps_to: "draft_dispute",
-      rationale: "Prepare a dispute draft in-app. Nothing is emailed or sent to the scheme until a human approves export.",
+      rationale: `Recommendation: prepare a dispute draft in-app for ${ref || exceptionId || "this exception"}${leakage != null ? ` (leakage ${inrExact(leakage)})` : ""}. Nothing is emailed or sent to the scheme until a human approves export.`,
     });
   }
   if (!suggestions.length) {
@@ -569,7 +570,7 @@ export function buildAuditorSkeleton(
       priority: "medium",
       expected_recovery: leakage ?? 0,
       maps_to: "case",
-      rationale: "The auditor cannot auto-close this item. Route it for human review.",
+      rationale: `Recommendation: the auditor cannot auto-close ${ref || exceptionId || "this item"}${leakage != null ? ` (leakage ${inrExact(leakage)})` : ""}. Route it for human review.`,
     });
   }
 
@@ -594,6 +595,133 @@ export function buildAuditorSkeleton(
     schema_valid: true,
     source: "deterministic",
   };
+}
+
+
+const ADVICE_RE = /\b(recover|write off|escalate|draft|request the missing|adjust the next|recalculate|route it for human|human must approve|add .+ to the next|raise an in-app)\b/i;
+
+export type EvidencePack = {
+  text: string;
+  leakage: number | null;
+  expected: number | null;
+  actual: number | null;
+  ref: string;
+  merchant: string;
+  exceptionId: string;
+};
+
+export function buildEvidencePack(input: unknown, priors: { agent?: string; output: unknown }[] = []): EvidencePack {
+  const facts = walkFacts(input);
+  for (const p of priors) walkFacts(p.output, facts);
+  const leakage = num(facts, "leakage", "amount", "impact", "shortfall");
+  const expected = num(facts, "expected_amount", "expected", "expected_net");
+  const actual = num(facts, "actual_amount", "actual", "paid");
+  const exceptionId = text(facts, "exception_id", "exceptionid");
+  const ref = text(facts, "ref_id", "recon_ref", "ref") || (exceptionId.includes(":") ? exceptionId.split(":").pop() || "" : exceptionId);
+  const merchant = text(facts, "merchant_id", "merchant");
+  return {
+    text: JSON.stringify({ facts, input, priors }),
+    leakage,
+    expected,
+    actual,
+    ref,
+    merchant,
+    exceptionId,
+  };
+}
+
+export function packCitation(pack: EvidencePack): string {
+  const bits = [
+    pack.leakage != null ? `leakage ${inrExact(pack.leakage)}` : "",
+    pack.ref || pack.exceptionId || "",
+    pack.expected != null && pack.actual != null ? `${inrExact(pack.expected)} expected versus ${inrExact(pack.actual)} paid` : "",
+  ].filter(Boolean);
+  if (pack.leakage != null && (pack.ref || pack.exceptionId)) {
+    return `${inrExact(pack.leakage)} on ${pack.ref || pack.exceptionId}`;
+  }
+  return bits.join(", ") || "the evidence pack";
+}
+
+function sentenceGrounded(sentence: string, pack: EvidencePack): boolean {
+  const g = checkGrounding({ line: sentence }, pack.text);
+  return g.passed;
+}
+
+function hasPackFigure(sentence: string, pack: EvidencePack): boolean {
+  const s = sentence.toLowerCase();
+  if (pack.ref && s.includes(String(pack.ref).toLowerCase())) return true;
+  if (pack.exceptionId && s.includes(String(pack.exceptionId).toLowerCase())) return true;
+  if (pack.merchant && s.includes(String(pack.merchant).toLowerCase())) return true;
+  const nums = [pack.leakage, pack.expected, pack.actual].filter((n): n is number => n != null);
+  return nums.some((n) => s.includes(String(n)) || s.includes(inrExact(n).toLowerCase()) || s.includes(inrExact(n)));
+}
+
+/** Make one sentence cite a pack figure, or tag it as recommendation/hypothesis so the scorer ignores it. */
+export function citeOrTagSentence(sentence: string, pack: EvidencePack): string {
+  const raw = String(sentence ?? "").trim();
+  if (!raw) return raw;
+  if (SENTENCE_TAG_RE.test(raw)) {
+    return hasPackFigure(raw, pack) ? raw : `${raw.replace(/\.$/, "")} (${packCitation(pack)}).`;
+  }
+  const citation = packCitation(pack);
+  const grounded = sentenceGrounded(raw, pack);
+  const advice = ADVICE_RE.test(raw);
+  const speculative = /\b(may explain|might|possible|not proven|hypothesis)\b/i.test(raw);
+  if (speculative) {
+    const body = hasPackFigure(raw, pack) ? raw : `${raw.replace(/\.$/, "")} (${citation}).`;
+    return body.startsWith("Hypothesis:") ? body : `Hypothesis: ${body.replace(/^Hypothesis:\s*/i, "")}`;
+  }
+  if (advice && !grounded) {
+    const body = hasPackFigure(raw, pack) ? raw : `${raw.replace(/\.$/, "")} (${citation}).`;
+    return body.startsWith("Recommendation:") ? body : `Recommendation: ${body.replace(/^Recommendation:\s*/i, "")}`;
+  }
+  if (advice && grounded && !hasPackFigure(raw, pack)) {
+    return `Recommendation: ${raw.replace(/\.$/, "")} (${citation}).`;
+  }
+  if (!grounded) {
+    const body = `${raw.replace(/\.$/, "")} (${citation}).`;
+    return `Hypothesis: ${body} This is not proven by the evidence pack.`;
+  }
+  if (!hasPackFigure(raw, pack) && (pack.leakage != null || pack.ref || pack.exceptionId) && /\b(audit|check|leakage|payout|exception|variance|shortfall)\b/i.test(raw)) {
+    return `${raw.replace(/\.$/, "")} (${citation}).`;
+  }
+  return raw;
+}
+
+function mapSentences(text: string, pack: EvidencePack): string {
+  return String(text ?? "")
+    .split(/\n+/)
+    .map((line) =>
+      line
+        .split(/(?<=[.!?])\s+/)
+        .map((s) => citeOrTagSentence(s.trim(), pack))
+        .filter(Boolean)
+        .join(" "),
+    )
+    .join("\n")
+    .trim();
+}
+
+/** Every auditor prose sentence cites a pack figure or is explicitly tagged as non-factual. */
+export function enforceCitedSentences(
+  out: AuditorOutput,
+  input: unknown,
+  priors: { agent?: string; output: unknown }[] = [],
+): AuditorOutput {
+  const pack = buildEvidencePack(input, priors);
+  out.rationale = mapSentences(out.rationale, pack);
+  out.cfo_one_liner = mapSentences(out.cfo_one_liner, pack);
+  if (out.compliance_notes) out.compliance_notes = mapSentences(out.compliance_notes, pack);
+  for (const c of out.checks) c.evidence = mapSentences(c.evidence, pack);
+  for (const f of out.findings) f.issue = mapSentences(f.issue, pack);
+  for (const s of out.suggestions) {
+    s.title = hasPackFigure(s.title, pack) || !packCitation(pack) ? s.title : `${s.title} (${packCitation(pack)})`;
+    s.rationale = mapSentences(s.rationale, pack);
+    if (SENTENCE_TAG_RE.test(s.rationale) && s.kind !== "fact") {
+      s.kind = /^Hypothesis:/i.test(s.rationale) || /\[hypothesis\]/i.test(s.rationale) ? "recommendation" : "recommendation";
+    }
+  }
+  return out;
 }
 
 export function finalizeAuditorOutput(
@@ -631,6 +759,7 @@ export function finalizeAuditorOutput(
   out.cfo_one_liner = plainEnglishEvidence(out.cfo_one_liner);
   if (out.compliance_notes) out.compliance_notes = plainEnglishEvidence(out.compliance_notes);
   out.suggestions = annotateAll(out.suggestions, input, priors);
+  enforceCitedSentences(out, input, priors);
   return alignCfoToVerdict(out);
 }
 

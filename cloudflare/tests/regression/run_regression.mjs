@@ -1068,9 +1068,10 @@ async function sectionTypecheck() {
   const numbers = spawnSync("npx", ["tsx", "scripts/test-numbers.ts"], { cwd: ROOT, encoding: "utf8" });
   const auth = spawnSync("npx", ["tsx", "scripts/test-auth.ts"], { cwd: ROOT, encoding: "utf8" });
   const grounding = spawnSync("npx", ["tsx", "scripts/test-grounding.ts"], { cwd: ROOT, encoding: "utf8" });
+  const auditorCite = spawnSync("npx", ["tsx", "scripts/test-auditor-cite.ts"], { cwd: ROOT, encoding: "utf8" });
   const scope = spawnSync("npx", ["tsx", "scripts/test-scope.ts"], { cwd: ROOT, encoding: "utf8" });
-  const ok = tscW.status === 0 && tscA.status === 0 && cfo.status === 0 && numbers.status === 0 && grounding.status === 0 && scope.status === 0;
-  card.notes.push(`Typecheck worker ${tscW.status === 0 ? "ok" : "FAIL"} frontend ${tscA.status === 0 ? "ok" : "FAIL"}; auditor CFO ${cfo.status === 0 ? "ok" : "FAIL"}; numbers ${numbers.status === 0 ? "ok" : "FAIL"}; grounding ${grounding.status === 0 ? "ok" : "FAIL"}; scope ${scope.status === 0 ? "ok" : "FAIL"}`);
+  const ok = tscW.status === 0 && tscA.status === 0 && cfo.status === 0 && numbers.status === 0 && grounding.status === 0 && auditorCite.status === 0 && scope.status === 0;
+  card.notes.push(`Typecheck worker ${tscW.status === 0 ? "ok" : "FAIL"} frontend ${tscA.status === 0 ? "ok" : "FAIL"}; auditor CFO ${cfo.status === 0 ? "ok" : "FAIL"}; numbers ${numbers.status === 0 ? "ok" : "FAIL"}; grounding ${grounding.status === 0 ? "ok" : "FAIL"}; auditor-cite ${auditorCite.status === 0 ? "ok" : "FAIL"}; scope ${scope.status === 0 ? "ok" : "FAIL"}`);
   if (!ok) {
     card.remaining.push(`Typecheck/unit tests failed:\n${(tscW.stdout + tscW.stderr + tscA.stdout + tscA.stderr + cfo.stdout + cfo.stderr + numbers.stdout + numbers.stderr + grounding.stdout + grounding.stderr + scope.stdout + scope.stderr).slice(0, 1200)}`);
   }

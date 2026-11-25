@@ -205,6 +205,8 @@ export function systemPrompt(agentId: AgentId): string {
     "Include all six checks (amount_reconciliation, evidence_completeness, policy_compliance, duplicate_prior_case, segregation_of_duties, grounding).",
     "Suggestions are in-app proposals only: they may map to the Action Queue, an in-app dispute/data-request draft, or a case. Never send email or call an external API.",
     "verdict is approved, needs_review, or rejected. Every number and ID must appear in INPUT.",
+    "Every sentence in checks.evidence, findings, rationale, cfo_one_liner and suggestion rationale must cite a figure or ID from the INPUT evidence pack, or start with Hypothesis: or Recommendation: (those tags are not scored as facts).",
+    "Advice lines must name the evidence-pack figure they rely on (leakage, expected, actual, or exception id).",
   ] : [];
   return [
     `You are the ${meta?.name} agent for a payment-acquiring revenue assurance platform.`,

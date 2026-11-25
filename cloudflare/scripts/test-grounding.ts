@@ -87,5 +87,40 @@ const g3 = checkGrounding(timed, "CFG-003 2028.36");
 eq(g3.passed, true, "timing ms and self-scores excluded from faithfulness");
 eq(g3.unsupported.length, 0, "no leftover timing claims");
 
+const words = checkGrounding(
+  { root_cause: "Auditor cannot investigate captures or an anomaly on PAY-MER002-2026-10 at MER002, leakage 19421.10." },
+  context,
+);
+eq(words.passed, true, "English words cannot/investigate/captures/anomaly are not IDs");
+const ids = checkGrounding(
+  { root_cause: "Review INV-MER002-2026-10 and APM-2026-10-04-LazyPay and CFG-003 and AUTH00036" },
+  "INV-MER002-2026-10 APM-2026-10-04-LazyPay CFG-003 AUTH00036",
+);
+eq(ids.passed, true, "hyphenated and merchant IDs still count as IDs when present in context");
+const missing = checkGrounding(
+  { root_cause: "Review INV-MER002-2026-10" },
+  "PAY-MER002-2026-10 MER002",
+);
+eq(missing.passed, false, "INV-MER002-2026-10 is still a claim when absent from context");
+
+const sugOut = {
+  cfo_one_liner: "Auditor needs review on PAY-MER002-2026-10 / MER002, leakage 19421.10.",
+  suggestions: [
+    { suggestion_id: "sug-1", title: "Recover 19421.10 from the payout run", kind: "fact", expected_recovery: 19421.10, citation: "₹19,421.10 on PAY-MER002-2026-10" },
+  ],
+};
+const g4 = checkGrounding(sugOut, context);
+eq(g4.passed, true, "sug-1 is not a book id");
+
+const tagged = {
+  rationale: "Audit of PAY-MER002-2026-10 at MER002, leakage 19421.10. Recommendation: write off 99999.99 because of a policy threshold.",
+};
+const g5 = checkGrounding(tagged, context);
+eq(g5.passed, true, "tagged recommendation excluded even with an uncited number");
+eq(g5.unsupported.length, 0, "99999.99 must not count as a factual hallucination");
+
 console.log("test-grounding ok");
+
+
+
 

@@ -93,11 +93,12 @@ function extractClaims(output: unknown): GroundingClaim[] {
   const dateRe = /\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})\b/gi;
   while ((m = dateRe.exec(text))) add("date", m[0]);
 
-  const idRe = /\b(?:MER|CAP|ACQ|PAR|DOC|RULE|CTL|ANOM|CAN|TXN|UPI|INV|E2E|IPM|VISA|CAMT|ING|RSK|APM|TRS|TRX)[A-Z0-9:_-]{2,}\b|\b[A-Z]{2,5}\d{3,}\b|\b[a-z]+(?::[a-z0-9_]+){2,}\b/gi;
+  const idRe = /\b(?:MER|CAP|ACQ|PAR|DOC|RULE|CTL|ANOM|CAN|TXN|UPI|INV|E2E|IPM|VISA|CAMT|ING|RSK|APM|TRS|TRX)(?:-[A-Z0-9:_-]+|\d[A-Z0-9:_-]*)\b|\b[A-Z]{2,8}-\d[A-Z0-9:_-]*\b|\b[A-Z]{2,5}\d{3,}\b|\b[a-z]+(?::[a-z0-9_]+){2,}\b/gi;
   while ((m = idRe.exec(text))) {
     const v = m[0];
     if (STOP_IDS.has(v.toUpperCase())) continue;
     if (v.length < 4) continue;
+    if (/^(sug|suggestion|check|item|rec|act)-\d+$/i.test(v)) continue;
     add("id", v);
   }
 
@@ -119,6 +120,52 @@ const META_KEYS = new Set([
   "unsupported", "claims", "supported", "error", "model",
   "prompt_tokens", "completion_tokens", "eval_id",
 ]);
+
+/** Advice / hypothesis sentences that start with these tags are not scored as facts. */
+export const SENTENCE_TAG_RE = /^\s*(?:\[(?:recommendation|hypothesis)\]|Recommendation:|Hypothesis:)\s*/i;
+
+function splitSentences(text: string): string[] {
+  return String(text)
+    .split(/\n+/)
+    .flatMap((line) => line.split(/(?<=[.!?])\s+/))
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Pull tagged recommendation/hypothesis sentences out of strings and nested objects. */
+export function peelTaggedProse(value: unknown): { factual: unknown; tagged: unknown } {
+  if (typeof value === "string") {
+    const factual: string[] = [];
+    const tagged: string[] = [];
+    for (const s of splitSentences(value)) {
+      (SENTENCE_TAG_RE.test(s) ? tagged : factual).push(s);
+    }
+    return { factual: factual.join(" "), tagged: tagged.join(" ") || null };
+  }
+  if (Array.isArray(value)) {
+    const factual: unknown[] = [];
+    const tagged: unknown[] = [];
+    for (const item of value) {
+      const p = peelTaggedProse(item);
+      if (p.factual !== "" && p.factual != null && !(Array.isArray(p.factual) && (p.factual as unknown[]).length === 0)) {
+        factual.push(p.factual);
+      }
+      if (p.tagged) tagged.push(p.tagged);
+    }
+    return { factual, tagged: tagged.length ? tagged : null };
+  }
+  if (value && typeof value === "object") {
+    const factual: Record<string, unknown> = {};
+    const tagged: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const p = peelTaggedProse(v);
+      if (p.factual !== "" && p.factual != null) factual[k] = p.factual;
+      if (p.tagged) tagged[k] = p.tagged;
+    }
+    return { factual, tagged: Object.keys(tagged).length ? tagged : null };
+  }
+  return { factual: value, tagged: null };
+}
 
 /** Split facts from labelled hypotheses / recommendation-only suggestions. */
 export function splitFactualOutput(output: unknown): { factual: unknown; hypotheses: unknown } {
@@ -155,7 +202,15 @@ export function splitFactualOutput(output: unknown): { factual: unknown; hypothe
     }
     factual[k] = v;
   }
-  return { factual, hypotheses: Object.keys(hypotheses).length ? hypotheses : null };
+  const peeled = peelTaggedProse(factual);
+  const factualOut = peeled.factual;
+  if (peeled.tagged) {
+    const existing = hypotheses.tagged_sentences;
+    hypotheses.tagged_sentences = existing
+      ? [existing, peeled.tagged]
+      : peeled.tagged;
+  }
+  return { factual: factualOut, hypotheses: Object.keys(hypotheses).length ? hypotheses : null };
 }
 
 /** GroundedNumbers must be 1.0 — every extracted number/ID/date/entity is in the context. */
