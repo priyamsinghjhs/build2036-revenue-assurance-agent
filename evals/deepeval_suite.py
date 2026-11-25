@@ -14,6 +14,7 @@ Optional:
   CF_EVAL_MODEL        default @cf/meta/llama-4-scout-17b-16e-instruct
   CF_EVAL_MAX_TOKENS   default 256
   CF_EVAL_NEURON_BUDGET default 4000 (leave headroom under the 10k/day free cap)
+  EVAL_LYNX            set to 1 to add the local LynxFaithfulness judge (free, llama.cpp)
 
 Do not print tokens.
 """
@@ -46,6 +47,10 @@ def load_goldens():
 
 def main() -> int:
     if not secrets_present():
+        if os.environ.get("EVAL_LYNX", "0").strip() in {"1", "true", "TRUE", "yes", "YES"}:
+            print("Workers AI credentials are not set; running the local Lynx judge only.")
+            from lynx_eval import main as lynx_main
+            return lynx_main()
         print("Skipping DeepEval — CF_ACCOUNT_ID and CF_AI_API_TOKEN (or CLOUDFLARE_API_TOKEN) are not set.")
         return 0
 
@@ -72,6 +77,21 @@ def main() -> int:
         number_id_score,
         suggestion_presence_score,
     )
+
+    lynx_metric = None
+    if os.environ.get("EVAL_LYNX", "0").strip() in {"1", "true", "TRUE", "yes", "YES"}:
+        from lynx_metric import LynxFaithfulness, ensure_lynx_server, lynx_available
+
+        ok, detail = lynx_available()
+        if not ok:
+            print(f"EVAL_LYNX=1 but Lynx is unavailable ({detail}). Keeping the Workers AI judge as the fallback.")
+        else:
+            started, started_detail = ensure_lynx_server()
+            if not started:
+                print(f"EVAL_LYNX=1 but llama-server failed to start ({started_detail}). Keeping the Workers AI judge as the fallback.")
+            else:
+                print(f"Lynx judge enabled: {started_detail}")
+                lynx_metric = LynxFaithfulness(threshold=1.0, include_reason=True)
 
     judge = WorkersAIModel()
     metric_kwargs = dict(
@@ -144,11 +164,13 @@ def main() -> int:
         refusal_ok = expected_is_refusal(row.get("expected_output")) and is_refusal(actual)
         refusal_wrong = expected_is_refusal(row.get("expected_output")) and not is_refusal(actual)
         case_fail = False
-        def add_metric(name, score, threshold, success, error=None, kind="deterministic"):
+        def add_metric(name, score, threshold, success, error=None, kind="deterministic", affect_quality=True, extra=None):
             nonlocal case_fail
             rec = {"name": name, "threshold": threshold, "score": score, "success": success, "error": error, "kind": kind}
+            if extra:
+                rec.update(extra)
             entry["metrics"].append(rec)
-            if error or success is False:
+            if affect_quality and (error or success is False):
                 case_fail = True
             status = "PASS" if success else ("ERROR" if error else "FAIL")
             print(f"  {status} {agent}/{name} score={score} threshold={threshold}")
@@ -172,6 +194,42 @@ def main() -> int:
             context=list(ctx),
             retrieval_context=list(ctx),
         )
+        if lynx_metric is not None:
+            try:
+                # Score against the full agent context, not the shorter retrieval snippet.
+                case_lynx = LLMTestCase(
+                    input=row["input"],
+                    actual_output=actual,
+                    expected_output=row.get("expected_output"),
+                    context=[row.get("context") or context_text],
+                    retrieval_context=[row.get("context") or context_text],
+                )
+                lynx_metric.measure(case_lynx, _show_indicator=False)
+                add_metric(
+                    "LynxFaithfulness",
+                    None if lynx_metric.score is None else float(lynx_metric.score),
+                    lynx_metric.threshold,
+                    bool(lynx_metric.success) if lynx_metric.success is not None else False,
+                    str(lynx_metric.error) if lynx_metric.error else None,
+                    kind="lynx",
+                    affect_quality=False,
+                    extra={
+                        "verdict": lynx_metric.last_verdict,
+                        "reason": lynx_metric.reason,
+                        "elapsed_s": lynx_metric.last_elapsed_s,
+                        "cost_inr": 0,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                add_metric(
+                    "LynxFaithfulness",
+                    0.0,
+                    1.0,
+                    False,
+                    str(exc),
+                    kind="lynx",
+                    affect_quality=False,
+                )
         bundle = metrics_rag if agent == "contracts_rag" else metrics_std
         for metric_name, metric in bundle:
             if skip_llm:
@@ -214,6 +272,13 @@ def main() -> int:
     print(f"DONE quality_fail={quality_fail} api_fail={fatal} total={len(results)} neurons={USAGE.neurons:.2f}")
     if out:
         print(f"RESULTS {out}")
+    if os.environ.get("EVAL_LYNX", "0").strip() in {"1", "true", "TRUE", "yes", "YES"}:
+        # Probe + expected_output pass (actuals already scored above when the Lynx server is up).
+        os.environ.setdefault("EVAL_LYNX_ACTUALS", "0")
+        from lynx_eval import main as lynx_main
+        lynx_rc = lynx_main()
+        if lynx_rc not in (0, None) and fatal:
+            return 1
     # Soft quality misses do not fail the process; API/budget issues do.
     return 1 if fatal else 0
 
@@ -254,7 +319,9 @@ def _write_results(results, quality_fail, fatal, incomplete: bool):
             "DeepEval 4.x scores Faithfulness, Hallucination, AnswerRelevancy, "
             "ContextualRecall and ContextualPrecision as higher-is-better fractions. "
             "Hallucination is the share of claims judged supported (not a raw hallucination rate). "
-            "Workers AI is the model-under-test and the judge. No OpenAI or Confident AI was used."
+            "Workers AI is the model-under-test and the default judge. "
+            "When EVAL_LYNX=1, LynxFaithfulness is an additional local judge (₹0). "
+            "No OpenAI or Confident AI was used."
         ),
         "summary": summary,
         "results": results,

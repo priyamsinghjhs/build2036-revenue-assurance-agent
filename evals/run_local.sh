@@ -2,7 +2,7 @@
 # Local, free DeepEval run against Workers AI.
 # Reads credentials from the environment only — this file contains no secrets.
 #
-# Required:
+# Required (unless EVAL_LYNX=1, in which case Workers AI tokens are optional):
 #   CF_ACCOUNT_ID
 #   CF_AI_API_TOKEN   (token with Workers AI permission; preferred)
 #     or CLOUDFLARE_API_TOKEN as a fallback (the wrangler User API Token may
@@ -11,6 +11,9 @@
 # Optional:
 #   EVAL_RESULTS_DIR, CF_EVAL_MODEL, CF_EVAL_MAX_TOKENS, CF_EVAL_NEURON_BUDGET
 #   DEEPEVAL_VENV     (default /workspace/deepeval-venv)
+#   EVAL_LYNX=1       also run the local Patronus Lynx 8B judge (llama.cpp, ₹0)
+#                     When EVAL_LYNX=1, Workers AI tokens are optional: the script
+#                     can score goldens + planted probes with Lynx only.
 #
 # Does not call OpenAI or Confident AI. Does not print tokens.
 
@@ -33,12 +36,25 @@ export EVAL_RESULTS_DIR="$OUT"
 # Keep DeepEval from trying to open a browser or write a home telemetry file if possible
 export PYTHONUNBUFFERED=1
 
-if [[ -z "${CF_ACCOUNT_ID:-}" ]]; then
-  echo "CF_ACCOUNT_ID is not set. Get the account id with: npx wrangler whoami" >&2
-  exit 1
+LYNX_ON=0
+if [[ "${EVAL_LYNX:-0}" == "1" || "${EVAL_LYNX:-}" == "true" || "${EVAL_LYNX:-}" == "yes" ]]; then
+  LYNX_ON=1
+  export EVAL_LYNX=1
 fi
-if [[ -z "${CF_AI_API_TOKEN:-}" && -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-  echo "Set CF_AI_API_TOKEN (Workers AI permission) or CLOUDFLARE_API_TOKEN." >&2
+
+HAVE_CF=1
+if [[ -z "${CF_ACCOUNT_ID:-}" || ( -z "${CF_AI_API_TOKEN:-}" && -z "${CLOUDFLARE_API_TOKEN:-}" ) ]]; then
+  HAVE_CF=0
+fi
+
+if [[ "$HAVE_CF" -eq 0 && "$LYNX_ON" -eq 0 ]]; then
+  if [[ -z "${CF_ACCOUNT_ID:-}" ]]; then
+    echo "CF_ACCOUNT_ID is not set. Get the account id with: npx wrangler whoami" >&2
+  fi
+  if [[ -z "${CF_AI_API_TOKEN:-}" && -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    echo "Set CF_AI_API_TOKEN (Workers AI permission) or CLOUDFLARE_API_TOKEN." >&2
+  fi
+  echo "Or set EVAL_LYNX=1 to run the free local Lynx judge only (no Workers AI required)." >&2
   exit 1
 fi
 if [[ ! -x "$VENV/bin/python" ]]; then
@@ -48,9 +64,15 @@ if [[ ! -x "$VENV/bin/python" ]]; then
 fi
 
 mkdir -p "$OUT"
-echo "Running DeepEval suite. Results will be written to $OUT"
+echo "Results will be written to $OUT"
 cd "$ROOT/evals"
-"$VENV/bin/python" deepeval_suite.py
+if [[ "$HAVE_CF" -eq 1 ]]; then
+  echo "Running DeepEval suite (Workers AI model + judges${LYNX_ON:+, plus LynxFaithfulness})."
+  "$VENV/bin/python" deepeval_suite.py
+elif [[ "$LYNX_ON" -eq 1 ]]; then
+  echo "Running local Lynx judge only (goldens expected_output + planted probes + refusals)."
+  "$VENV/bin/python" lynx_eval.py
+fi
 
 # Cheap, no-LLM conversion demo: write into the results folder, not repo goldens.
 SAMPLE="$OUT/sample_rejected.json"

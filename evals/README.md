@@ -22,6 +22,7 @@ python3 -m venv /workspace/deepeval-venv
 export CF_ACCOUNT_ID=...          # npx wrangler whoami
 export CF_AI_API_TOKEN=...        # API token with Workers AI permission
 # Optional: CF_EVAL_MAX_TOKENS=256 CF_EVAL_NEURON_BUDGET=4000
+# Optional: EVAL_LYNX=1  (local Patronus Lynx 8B judge, ₹0)
 evals/run_local.sh
 ```
 
@@ -46,9 +47,32 @@ Metrics:
 - Contextual Recall and Contextual Precision — contract RAG goldens (`goldens/contracts_rag.json`)
 - RefusalAlignment — a correct `insufficient data` answer on a missing-context golden is a pass (and the LLM judge is skipped)
 - GroundedNumbers — every number and ID in the answer must appear in (or be derivable from) the context
+- LynxFaithfulness — optional (`EVAL_LYNX=1`): local Patronus Lynx 8B PASS/FAIL faithfulness judge
 - AuditorSchema and SuggestionPresence — auditor goldens must be valid structured JSON with checks and at least one suggestion
 
 Hallucination is not re-judged by the LLM when GroundedNumbers is a perfect match, which keeps the judge cheaper and less brittle.
+
+
+## Local Lynx judge (optional, free)
+
+[Patronus Lynx](https://github.com/patronus-ai/Lynx-hallucination-detection) (`Llama-3-Patronus-Lynx-8B-Instruct`) is a hallucination detector. Cloudflare Workers AI does not host it. This suite runs the official Q4_K_M GGUF on the box CPU through [llama.cpp](https://github.com/ggml-org/llama.cpp) (`EVAL_LYNX=1`). There is no paid inference and no extra Workers AI neurons for the judge (₹0).
+
+```bash
+# One-time: official GGUF (~4.9 GB) + llama.cpp CPU binary, written outside the repo
+evals/download_lynx.sh
+# Score goldens (expected answers), planted probes, and correct-refusal cases
+EVAL_LYNX=1 evals/run_local.sh
+```
+
+`LynxFaithfulness` (`evals/lynx_metric.py`) is a DeepEval `BaseMetric`. It sends the official Lynx prompt (QUESTION / DOCUMENT / ANSWER) and parses JSON `{REASONING, SCORE: PASS|FAIL}`. `evals/lynx_probes.json` holds planted unfaithful answers (wrong ₹ amount, wrong ID, fabricated 12 vs 14 bps clause, wrong fee cap). Results are written next to the usual DeepEval files as `lynx_results.json` and `LYNX_RESULTS.md`.
+
+If the GGUF or llama-server is missing, the suite prints a warning and keeps the Workers AI judge as the fallback. It does not pretend Workers AI is Lynx. GroundedNumbers still runs alongside Lynx; they can disagree when a clause is wrong but every numeral still appears in the document.
+
+On a CPU-only 16 GiB box the 8B Q4_K_M weights are tight (no swap). If llama-server cannot start, set `LYNX_FALLBACK_GGUF` to the QuantFactory Q3_K_M file (`LYNX_ALSO_Q3=1 evals/download_lynx.sh`). The 70B Lynx model will not run here.
+
+**License:** the Lynx weights are [CC-BY-NC-4.0](https://creativecommons.org/licenses/by-nc-4.0/) plus the [Llama 3 Community License](https://www.llama.com/llama3/license/) on the base model. Non-commercial use is the tighter constraint. Use this judge for local evaluation; do not ship the weights in a commercial product without a license that allows it.
+
+Environment: `LYNX_MODEL_PATH`, `LYNX_LLAMA_SERVER`, `LYNX_SERVER_PORT` (default 8088), `LYNX_CTX` (default 2048), `LYNX_MAX_TOKENS` (default 320), `LYNX_THREADS` (default 8).
 
 ## Benchmark other Workers AI models
 
