@@ -646,7 +646,7 @@ const password = process.env.APP_SHARED_PASSWORD || "";
 if (!password) throw new Error("APP_SHARED_PASSWORD is not set");
 const loginCtx = await browser.newContext();
 const loginPage = await loginCtx.newPage();
-await loginPage.goto(BASE + "/login", { waitUntil: "load", timeout: 45000 });
+await loginPage.goto(BASE + "/login", { waitUntil: "networkidle", timeout: 45000 });
 await loginPage.fill('[data-testid="login-username"]', "admin@ra.local");
 await loginPage.fill('[data-testid="login-password"]', password);
 await loginPage.click('[data-testid="login-submit"]');
@@ -710,7 +710,9 @@ for (const w of WIDTHS) {
   page.on("pageerror", (e)=>errors.push({ w, type:"pageerror", msg:e.message, url:page.url() }));
   page.on("console", (msg)=>{ if (msg.type()==="error") errors.push({ w, type:"console", msg:msg.text(), url:page.url() }); });
   for (const path of PAGES) {
-    await page.goto(BASE+path, { waitUntil: "load", timeout: 45000 }).catch((e)=>errors.push({ w, type:"nav", msg:String(e), url:path }));
+    const ready = path === "/routing" ? "load" : "networkidle";
+    await page.goto(BASE+path, { waitUntil: ready, timeout: 45000 }).catch((e)=>errors.push({ w, type:"nav", msg:String(e), url:path }));
+    if (path === "/routing") await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(250);
     const hits = await overlapCount(page);
     overlaps.push({ path, w, hits });
@@ -800,7 +802,7 @@ for (const w of WIDTHS) {
       if (ds.filterBar) errors.push({ w, type: "filter-bar", msg: "Global filters should be hidden on Data sources", url: path });
       if (ds.leakedSecret) errors.push({ w, type: "data-sources", msg: "Possible secret material in the catalog", url: path });
       await page.screenshot({ path: "/workspace/verify/v10-datasources-catalog.png", fullPage: true });
-      await page.goto(BASE + "/settings/data-sources/new/oracle", { waitUntil: "load", timeout: 45000 }).catch((e) => errors.push({ w, type: "nav", msg: String(e), url: "/settings/data-sources/new/oracle" }));
+      await page.goto(BASE + "/settings/data-sources/new/oracle", { waitUntil: "networkidle", timeout: 45000 }).catch((e) => errors.push({ w, type: "nav", msg: String(e), url: "/settings/data-sources/new/oracle" }));
       const form = await page.evaluate(() => {
         const el = document.querySelector('[data-testid="data-source-form"]');
         const text = el ? el.innerText : "";
@@ -813,7 +815,7 @@ for (const w of WIDTHS) {
       if (!form.hasSetup) errors.push({ w, type: "data-sources", msg: "Oracle form missing Cloudflare Tunnel setup steps", url: "/settings/data-sources/new/oracle" });
       if (form.filterBar) errors.push({ w, type: "filter-bar", msg: "Global filters should be hidden on connector forms", url: "/settings/data-sources/new/oracle" });
       await page.screenshot({ path: "/workspace/verify/v10-datasources-oracle.png", fullPage: true });
-      await page.goto(BASE + "/settings/data-sources/new/mysql", { waitUntil: "load", timeout: 45000 }).catch((e) => errors.push({ w, type: "nav", msg: String(e), url: "/settings/data-sources/new/mysql" }));
+      await page.goto(BASE + "/settings/data-sources/new/mysql", { waitUntil: "networkidle", timeout: 45000 }).catch((e) => errors.push({ w, type: "nav", msg: String(e), url: "/settings/data-sources/new/mysql" }));
       const mysql = await page.evaluate(() => {
         const setup = document.querySelector('[data-testid="relay-setup"]')?.textContent || "";
         const honesty = document.querySelector('[data-testid="connector-honesty"]')?.textContent || "";
@@ -834,7 +836,7 @@ for (const w of WIDTHS) {
     }
     if (w === 1440 && path === "/investigate") {
       const payout = "/investigate/" + encodeURIComponent("payouts:under_payout:PAY-MER002-2026-10");
-      await page.goto(BASE + payout, { waitUntil: "load", timeout: 45000 }).catch((e) => errors.push({ w, type: "nav", msg: String(e), url: payout }));
+      await page.goto(BASE + payout, { waitUntil: "networkidle", timeout: 45000 }).catch((e) => errors.push({ w, type: "nav", msg: String(e), url: payout }));
       await page.waitForTimeout(500);
       await page.getByTestId("auditor-panel").waitFor({ timeout: 10000 }).catch(() => {});
       const audit = await page.evaluate(() => {
