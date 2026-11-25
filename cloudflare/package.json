@@ -9,7 +9,11 @@
     "deploy": "npm run build && wrangler deploy",
     "types": "wrangler types",
     "test:format": "npx tsx scripts/test-format.ts",
-    "cf-typecheck": "tsc -p tsconfig.worker.json --noEmit"
+    "cf-typecheck": "tsc -p tsconfig.worker.json --noEmit",
+    "test:numbers": "npx tsx scripts/test-numbers.ts",
+    "test:review-amount": "npx tsx scripts/test-review-amount.ts",
+    "test:figures": "npx tsx scripts/test-figure-consistency.ts",
+    "test": "npm run test:format && npm run test:numbers && npm run test:review-amount && npm run test:figures"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

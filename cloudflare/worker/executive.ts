@@ -1,5 +1,8 @@
 import type { AppDb } from "./pg";
 import { alignNarrativeToKpis } from "./brief";
+import { normalizeAmount } from "../shared/numbers";
+import { BOOK_LEAKAGE_SQL, bookTotalsFromAreas, isExposureArea, overlayLiveSummary } from "../shared/bookLeakage";
+import { liveAreaTrend, liveLeakageByArea } from "./recon";
 
 const AS_OF = "2026-11-21";
 
@@ -69,9 +72,7 @@ export type ExecPayload = {
 };
 
 
-/** Areas whose amounts are risk/ops exposure, not book leakage. */
-export const EXPOSURE_AREAS = ["aml", "network_risk", "kyc", "success", "interfaces", "anomalies", "files"] as const;
-export const BOOK_LEAKAGE_SQL = "area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')";
+export { BOOK_LEAKAGE_SQL, EXPOSURE_AREAS, isExposureArea } from "../shared/bookLeakage";
 
 export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
   const t0 = Date.now();
@@ -84,6 +85,7 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
     catsRes,
     exposureRes,
     trendRes,
+    liveMap,
     ageingRes,
     actionRes,
     briefRes,
@@ -98,9 +100,10 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
     db.prepare("SELECT COALESCE(SUM(recovered),0)::float AS recovered FROM ra_chargebacks").all<{ recovered: number }>(),
     db.prepare("SELECT COALESCE(SUM(amount),0)::float AS written_off FROM ra_writeoffs").all<{ written_off: number }>(),
     db.prepare("SELECT area, label, match_rate, leakage, exception_count AS exceptions FROM ra_area_summary ORDER BY leakage DESC").all<{ area: string; label: string; match_rate: number; leakage: number; exceptions: number }>(),
-    db.prepare(`SELECT area, category, n, leakage FROM ra_leakage_category WHERE ${BOOK_LEAKAGE_SQL} ORDER BY leakage DESC LIMIT 5`).all<{ area: string; category: string; n: number; leakage: number }>(),
-    db.prepare(`SELECT area, category, n, leakage FROM ra_leakage_category WHERE area IN ('aml','network_risk','kyc','success','interfaces','anomalies','files') ORDER BY leakage DESC LIMIT 5`).all<{ area: string; category: string; n: number; leakage: number }>(),
-    db.prepare("SELECT day, leakage, n FROM ra_leakage_trend ORDER BY day").all<{ day: string; leakage: number; n: number }>(),
+    db.prepare(`SELECT area, category, COUNT(*)::int AS n, COALESCE(SUM(leakage),0)::float AS leakage FROM ra_exception_rows WHERE ${BOOK_LEAKAGE_SQL} GROUP BY area, category ORDER BY leakage DESC LIMIT 5`).all<{ area: string; category: string; n: number; leakage: number }>(),
+    db.prepare(`SELECT area, category, COUNT(*)::int AS n, COALESCE(SUM(leakage),0)::float AS leakage FROM ra_exception_rows WHERE area IN ('aml','network_risk','kyc','success','interfaces','anomalies','files') GROUP BY area, category ORDER BY leakage DESC LIMIT 5`).all<{ area: string; category: string; n: number; leakage: number }>(),
+    liveAreaTrend(db),
+    liveLeakageByArea(db),
     db.prepare(
       `SELECT bucket, COUNT(*)::int AS n, COALESCE(SUM(leakage),0)::float AS leakage
        FROM (
@@ -129,47 +132,81 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
   const [flow] = flowRes.results ?? [];
   const [rec] = recRes.results ?? [];
   const [wo] = woRes.results ?? [];
-  const areasAll = areasRes.results;
-  const areas = (areasAll ?? []).filter((a) => !EXPOSURE_AREAS.includes(a.area as (typeof EXPOSURE_AREAS)[number]));
+  const live = liveMap;
+  const areasAll = (areasRes.results ?? []).map((a) => {
+    const overlaid = overlayLiveSummary(
+      { area: a.area, leakage: Number(a.leakage), exception_count: Number(a.exceptions) },
+      live,
+    );
+    return {
+      ...a,
+      leakage: overlaid.leakage,
+      exceptions: overlaid.exception_count,
+      match_rate: Number(a.match_rate),
+    };
+  });
+  // Include areas that have live exception rows but no stored summary row (e.g. anomalies).
+  const seen = new Set(areasAll.map((a) => a.area));
+  for (const [area, hit] of live) {
+    if (seen.has(area) || hit.n <= 0) continue;
+    areasAll.push({ area, label: area, match_rate: 0, leakage: hit.leakage, exceptions: hit.n });
+  }
+  areasAll.sort((a, b) => Number(b.leakage) - Number(a.leakage));
+  const areas = areasAll.filter((a) => !isExposureArea(a.area));
   const cats = catsRes.results;
   const exposureCats = exposureRes.results;
-  const trend = trendRes.results;
+  const trend = trendRes; // already [{day,n,leakage}]
   const ageingRaw = ageingRes.results;
   const actionAgg = actionRes.results;
   const [brief] = briefRes.results ?? [];
   const evals = ev ?? { faith: 0, unverified: 0 };
 
-  const revenue = Number(flow?.capture ?? 0);
-  const leakage = Number(kpi?.total_leakage ?? 0);
-  const recovered = Number(rec?.recovered ?? 0);
-  const writtenOff = Number(wo?.written_off ?? 0);
-  const recoverable = Math.max(0, leakage - recovered - writtenOff);
+  const revenue = normalizeAmount(flow?.capture ?? 0);
+  const book = bookTotalsFromAreas(areas.map((a) => ({ area: a.area, leakage: a.leakage, exception_count: a.exceptions })));
+  const leakage = book.leakage;
+  const recovered = normalizeAmount(rec?.recovered ?? 0);
+  const writtenOff = normalizeAmount(wo?.written_off ?? 0);
+  const recoverable = normalizeAmount(Math.max(0, leakage - recovered - writtenOff));
 
-  const prior = (trend ?? []).filter((t) => t.day <= "2026-10-15").reduce((s, t) => s + Number(t.leakage), 0);
-  const current = (trend ?? []).filter((t) => t.day > "2026-10-15").reduce((s, t) => s + Number(t.leakage), 0);
+  const prior = normalizeAmount((trend ?? []).filter((t) => t.day <= "2026-10-15").reduce((s, t) => s + Number(t.leakage), 0));
+  const current = normalizeAmount((trend ?? []).filter((t) => t.day > "2026-10-15").reduce((s, t) => s + Number(t.leakage), 0));
 
-  const topAreas = (areas ?? []).slice(0, 6);
-  const otherLeak = (areas ?? []).slice(6).reduce((s, a) => s + Number(a.leakage), 0);
+  const topAreas = areas.slice(0, 6);
+  const otherLeak = normalizeAmount(areas.slice(6).reduce((s, a) => s + Number(a.leakage), 0));
   const waterfall: ExecPayload["waterfall"] = [
     { name: "Gross revenue", value: revenue, kind: "total" },
-    ...topAreas.map((a) => ({ name: a.label, value: -Number(a.leakage), kind: "leak" as const })),
+    ...topAreas.map((a) => ({ name: a.label, value: -normalizeAmount(a.leakage), kind: "leak" as const })),
   ];
   if (otherLeak > 0) waterfall.push({ name: "Other leakage", value: -otherLeak, kind: "leak" });
-  waterfall.push({ name: "Net after leakage", value: revenue - leakage, kind: "net" });
+  waterfall.push({ name: "Net after leakage", value: normalizeAmount(revenue - leakage), kind: "net" });
 
   const byStatus = Object.fromEntries((actionAgg ?? []).map((r) => [r.status, r]));
   const funnel = [
-    { stage: "Recoverable", amount: recoverable, n: Number(kpi?.exception_count ?? 0) },
-    { stage: "Proposed", amount: Number(byStatus.proposed?.amount ?? 0), n: Number(byStatus.proposed?.n ?? 0) },
-    { stage: "Approved", amount: Number(byStatus.approved?.amount ?? 0), n: Number(byStatus.approved?.n ?? 0) },
-    { stage: "Recovered", amount: recovered + Number(byStatus.done?.amount ?? 0), n: Number(byStatus.done?.n ?? 0) },
+    { stage: "Recoverable", amount: recoverable, n: book.exception_count },
+    { stage: "Proposed", amount: normalizeAmount(byStatus.proposed?.amount ?? 0), n: Number(byStatus.proposed?.n ?? 0) },
+    { stage: "Approved", amount: normalizeAmount(byStatus.approved?.amount ?? 0), n: Number(byStatus.approved?.n ?? 0) },
+    { stage: "Recovered", amount: normalizeAmount(recovered + Number(byStatus.done?.amount ?? 0)), n: Number(byStatus.done?.n ?? 0) },
     { stage: "Written off", amount: writtenOff, n: 0 },
   ];
 
   const ageOrder = ["0-7 days", "8-30 days", "31-60 days", "61+ days", "unknown"];
   const ageing = ageOrder
-    .map((bucket) => ageingRaw?.find((r) => r.bucket === bucket) ?? { bucket, n: 0, leakage: 0 })
-    .filter((r) => r.n > 0 || r.bucket !== "unknown");
+    .map((bucket) => {
+      const r = ageingRaw?.find((row) => row.bucket === bucket) ?? { bucket, n: 0, leakage: 0 };
+      return { bucket, n: Number(r.n ?? 0), leakage: normalizeAmount(r.leakage) };
+    });
+  // Book totals may include summary-only areas (no exception rows). Fold the residual into "unknown" so ageing sums to the headline KPI.
+  const ageLeak = normalizeAmount(ageing.reduce((s, r) => s + r.leakage, 0));
+  const ageN = ageing.reduce((s, r) => s + r.n, 0);
+  const residualL = normalizeAmount(leakage - ageLeak);
+  const residualN = book.exception_count - ageN;
+  if (Math.abs(residualL) >= 0.01 || residualN) {
+    const unk = ageing.find((r) => r.bucket === "unknown") ?? { bucket: "unknown", n: 0, leakage: 0 };
+    if (!ageing.includes(unk)) ageing.push(unk);
+    unk.leakage = normalizeAmount(unk.leakage + residualL);
+    unk.n = Math.max(0, unk.n + residualN);
+  }
+  const ageingOut = ageing.filter((r) => r.n > 0 || r.leakage || r.bucket !== "unknown");
 
   let bullets: string[] = [];
   if (brief?.bullets) {
@@ -188,31 +225,31 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
       recoverable,
       written_off: writtenOff,
       match_rate: Number(kpi?.match_rate ?? 1),
-      exception_count: Number(kpi?.exception_count ?? 0),
+      exception_count: book.exception_count,
       auth_count: Number(kpi?.auth_count ?? 0),
       merchant_count: Number(kpi?.merchant_count ?? 0),
     },
-    ageing,
+    ageing: ageingOut,
     waterfall,
-    trend: (trend ?? []).map((t) => ({ day: t.day, leakage: Number(t.leakage), n: Number(t.n) })),
-    period_compare: { prior, current, delta: current - prior },
+    trend: (trend ?? []).map((t) => ({ day: t.day, leakage: normalizeAmount(t.leakage), n: Number(t.n) })),
+    period_compare: { prior, current, delta: normalizeAmount(current - prior) },
     top_drivers: (cats ?? []).map((c) => ({
       area: c.area,
       category: c.category,
       n: Number(c.n),
-      leakage: Number(c.leakage),
+      leakage: normalizeAmount(c.leakage),
     })),
     compliance_exposure: (exposureCats ?? []).map((c) => ({
       area: c.area,
       category: c.category,
       n: Number(c.n),
-      exposure: Number(c.leakage),
+      exposure: normalizeAmount(c.leakage),
     })),
-    heatmap: (areasAll ?? []).map((a) => ({
+    heatmap: areasAll.map((a) => ({
       area: a.area,
       label: a.label,
       match_rate: Number(a.match_rate),
-      leakage: Number(a.leakage),
+      leakage: normalizeAmount(a.leakage),
       exceptions: Number(a.exceptions),
     })),
     funnel,

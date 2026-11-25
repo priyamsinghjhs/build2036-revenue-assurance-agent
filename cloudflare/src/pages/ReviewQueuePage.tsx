@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api, type ReviewListItem } from "@/api";
 import { KpiCard } from "@/components/KpiCard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { inr } from "@/lib/format";
+import { inrExact } from "../../shared/money";
 
 export default function ReviewQueuePage() {
   const [rows, setRows] = useState<ReviewListItem[] | null>(null);
@@ -21,7 +21,7 @@ export default function ReviewQueuePage() {
       <div className="grid gap-3 sm:grid-cols-3">
         <KpiCard label="Pending review" value={String(pending.length)} tone={pending.length?"warn":"ok"} />
         <KpiCard label="Decided in queue" value={String(rows.length-pending.length)} />
-        <KpiCard label="Pending amount" value={inr(pending.reduce((s,r)=>s+Number(r.amount||0),0), true)} tone="leak" />
+        <KpiCard label="Pending leakage" value={inrExact(pending.reduce((s,r)=>s+Number(r.amount||0),0))} tone="leak" />
       </div>
       <Card>
         <CardHeader>
@@ -41,7 +41,7 @@ export default function ReviewQueuePage() {
                   </p>
                   <p className="mt-1 flex items-center justify-between text-sm">
                     <span>{r.review_status}</span>
-                    <span className="tabular-nums">{inr(Number(r.amount || 0), true)}</span>
+                    <span className="tabular-nums">{inrExact(Number(r.amount || 0))}</span>
                   </p>
                   <Link className="mt-2 inline-block text-xs font-medium text-accent hover:underline" to={`/review/${id}`}>Review</Link>
                 </li>
@@ -51,7 +51,7 @@ export default function ReviewQueuePage() {
           <div className="hidden overflow-x-auto md:block">
           <table className="w-full text-left text-sm">
             <thead className="text-[11px] uppercase tracking-wide text-muted"><tr>
-              <th className="pb-2 pr-3">Exception</th><th className="pb-2 pr-3">Area</th><th className="pb-2 pr-3">Merchant</th><th className="pb-2 pr-3">Status</th><th className="pb-2 pr-3 text-right">Amount</th><th className="pb-2">Open</th>
+              <th className="pb-2 pr-3">Exception</th><th className="pb-2 pr-3">Area</th><th className="pb-2 pr-3">Merchant</th><th className="pb-2 pr-3">Status</th><th className="pb-2 pr-3 text-right">Leakage</th><th className="pb-2">Open</th>
             </tr></thead>
             <tbody>
               {rows.map((r)=>{
@@ -64,7 +64,7 @@ export default function ReviewQueuePage() {
                     <td className="whitespace-nowrap py-2 pr-3">{r.area}</td>
                     <td className="py-2 pr-3">{r.merchant_id ?? "—"}</td>
                     <td className="py-2 pr-3">{r.review_status}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{inr(Number(r.amount||0), true)}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{inrExact(Number(r.amount || 0))}</td>
                     <td className="py-2"><Link className="text-xs text-accent hover:underline" to={`/review/${id}`}>Review</Link></td>
                   </tr>
                 );

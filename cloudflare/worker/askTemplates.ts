@@ -260,9 +260,32 @@ LIMIT 50`,
     return {
       id: "total_book_leakage",
       title: "Total book leakage",
-      sql: `SELECT ROUND(total_leakage::numeric, 2) AS total_leakage, exception_count, match_rate, merchant_count
-FROM v_ask_kpis
-LIMIT 1`,
+      sql: `SELECT
+  ROUND((
+    COALESCE((
+      SELECT SUM(leakage) FROM ra_exception_rows
+      WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
+    ), 0)
+    + COALESCE((
+      SELECT SUM(s.leakage) FROM ra_area_summary s
+      WHERE s.area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
+        AND NOT EXISTS (SELECT 1 FROM ra_exception_rows e WHERE e.area = s.area)
+    ), 0)
+  )::numeric, 2) AS total_leakage,
+  (
+    COALESCE((
+      SELECT COUNT(*) FROM ra_exception_rows
+      WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
+    ), 0)
+    + COALESCE((
+      SELECT SUM(s.exception_count) FROM ra_area_summary s
+      WHERE s.area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
+        AND NOT EXISTS (SELECT 1 FROM ra_exception_rows e WHERE e.area = s.area)
+    ), 0)
+  )::int AS exception_count,
+  (SELECT match_rate FROM ra_kpi_summary WHERE id = 1) AS match_rate,
+  (SELECT merchant_count FROM ra_kpi_summary WHERE id = 1) AS merchant_count
+`,
       narrative: (rows) => {
         const r = rows[0];
         if (!r) return "No book KPI row was returned.";
