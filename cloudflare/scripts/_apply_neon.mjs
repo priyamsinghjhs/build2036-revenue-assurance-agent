@@ -126,7 +126,8 @@ if (files[0] === "--dry") {
 }
 
 const { neon } = await import("@neondatabase/serverless");
-const url = readFileSync("/workspace/secrets/neon_database_url", "utf8").trim();
+const urlFile = process.env.DATABASE_URL_FILE || "/workspace/secrets/neon_database_url";
+const url = (process.env.DATABASE_URL || readFileSync(urlFile, "utf8")).trim();
 const sql = neon(url, { fetchOptions: { timeout: 120000 } });
 
 async function applyFile(f) {
