@@ -76,4 +76,16 @@ const hypSug = annotateSuggestion(
 );
 eq(hypSug.kind, "recommendation", "hypothesis suggestion tagged recommendation");
 
+const timed = {
+  actions: [{ type: "escalate", amount: 2028.36, rationale: "Escalate CFG-003 for review of 2028.36" }],
+  source: "deterministic",
+  verification: "grounded",
+  faithfulness: 1,
+  timing: { total_ms: 180, neon_ms: 180, ai_ms: 0, retries: 0 },
+};
+const g3 = checkGrounding(timed, "CFG-003 2028.36");
+eq(g3.passed, true, "timing ms and self-scores excluded from faithfulness");
+eq(g3.unsupported.length, 0, "no leftover timing claims");
+
 console.log("test-grounding ok");
+

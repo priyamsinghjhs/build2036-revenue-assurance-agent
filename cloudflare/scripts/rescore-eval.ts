@@ -1,10 +1,12 @@
 /**
- * Archive current ra_eval_scores, then re-score every row with the current
- * deterministic grounding checker. Never deletes original scores.
+ * Archive current ra_eval_scores (once per label), restore that archive, then
+ * re-score every row with the current deterministic grounding checker.
+ * Never deletes original scores.
  *
  * Usage: DATABASE_URL_FILE=/workspace/secrets/neon_database_url \
  *        npx tsx scripts/rescore-eval.ts
  * Optional: RESCORE_LABEL=ta13-grounding-rescore-2026-11-25
+ *           RESCORE_RESTORE=0  — skip restoring from archive before scoring
  * Never prints the database URL.
  */
 import { readFileSync, writeFileSync } from "node:fs";
@@ -41,55 +43,12 @@ function parseJson(raw: string | null): unknown {
   try { return JSON.parse(raw); } catch { return { raw }; }
 }
 
-function idsFrom(text: string): string[] {
+function exceptionIdsFrom(text: string): string[] {
   const out: string[] = [];
   const re = /\b[a-z]+(?::[a-z0-9_.:-]+){2,}\b/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) out.push(m[0]);
-  if (text.startsWith("exception:")) out.push(text.slice("exception:".length));
+  while ((m = re.exec(text))) out.push(m[0].replace(/^exception:/, ""));
   return [...new Set(out)];
-}
-
-async function factsFor(scope: string | null, output: unknown): Promise<string> {
-  const blob = `${scope || ""}\n${typeof output === "string" ? output : JSON.stringify(output)}`;
-  const ids = idsFrom(blob);
-  const chunks: string[] = [];
-  if (scope) chunks.push(`SCOPE ${scope}`);
-  for (const id of ids.slice(0, 8)) {
-    const parts = id.replace(/^exception:/, "").split(":");
-    let rows: Record<string, unknown>[] = [];
-    if (parts.length >= 3) {
-      rows = await sql.query(
-        `SELECT area, category, ref_id, merchant_id, ts, expected_amount, actual_amount, leakage, scheme, method, status,
-                area||':'||category||':'||ref_id AS exception_id
-           FROM ra_exception_rows
-          WHERE area=$1 AND category=$2 AND ref_id=$3
-          LIMIT 1`,
-        [parts[0], parts[1], parts.slice(2).join(":")],
-      );
-    }
-    if (!rows.length) {
-      const ref = parts[parts.length - 1];
-      rows = await sql.query(
-        `SELECT area, category, ref_id, merchant_id, ts, expected_amount, actual_amount, leakage, scheme, method, status,
-                area||':'||category||':'||ref_id AS exception_id
-           FROM ra_exception_rows WHERE ref_id=$1 LIMIT 3`,
-        [ref],
-      );
-    }
-    for (const r of rows) chunks.push(JSON.stringify(r));
-  }
-  if (chunks.length <= 1) {
-    const extra = await sql.query(
-      `SELECT area, category, ref_id, merchant_id, expected_amount, actual_amount, leakage,
-              area||':'||category||':'||ref_id AS exception_id
-         FROM ra_exception_rows ORDER BY leakage DESC NULLS LAST LIMIT 5`,
-      [],
-    );
-    // Do not add unrelated top-leakage rows — they would falsely support claims.
-    void extra;
-  }
-  return chunks.join("\n");
 }
 
 function verificationOf(prev: string, passed: boolean, source: string | undefined): string {
@@ -100,7 +59,174 @@ function verificationOf(prev: string, passed: boolean, source: string | undefine
   return "grounding_failed";
 }
 
+type ExceptionRow = Record<string, unknown>;
+
+async function loadUniverse() {
+  const exceptions = await sql.query(
+    `SELECT area, category, ref_id, merchant_id, ts, expected_amount, actual_amount, leakage, scheme, method, status,
+            area||':'||category||':'||ref_id AS exception_id
+       FROM ra_exception_rows`,
+    [],
+  ) as ExceptionRow[];
+  const byId = new Map<string, ExceptionRow>();
+  const byRef = new Map<string, ExceptionRow[]>();
+  const byArea = new Map<string, ExceptionRow[]>();
+  for (const e of exceptions) {
+    const id = String(e.exception_id);
+    byId.set(id, e);
+    const ref = String(e.ref_id);
+    byRef.set(ref, [...(byRef.get(ref) || []), e]);
+    const area = String(e.area);
+    byArea.set(area, [...(byArea.get(area) || []), e]);
+  }
+  const payouts = await sql.query(`SELECT payout_id, merchant_id, amount, expected_net, payout_date FROM ra_payouts`, []);
+  const areas = await sql.query(`SELECT area, label, matched, unmatched, variance, leakage, match_rate, exception_count FROM ra_area_summary`, []);
+  const kpis = await sql.query(
+    `SELECT public.ra_book_exception_count() AS book_exceptions,
+            (SELECT ROUND(SUM(leakage)::numeric, 2) FROM ra_area_summary
+              WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','files')) AS book_leakage`,
+    [],
+  );
+  const outputs = await sql.query(
+    `SELECT output_id, run_id, agent_id, domain, output_json, created_at FROM ra_agent_outputs ORDER BY created_at`,
+    [],
+  ) as { output_id: string; run_id: string; agent_id: string; domain: string | null; output_json: string; created_at: string }[];
+  const outputsByRun = new Map<string, typeof outputs>();
+  for (const o of outputs) {
+    const list = outputsByRun.get(o.run_id) || [];
+    list.push(o);
+    outputsByRun.set(o.run_id, list);
+  }
+  let policy = "";
+  try {
+    const pol = await sql.query(`SELECT topic, body FROM ra_policy_text`, []);
+    policy = pol.map((p: Record<string, unknown>) => `${p.topic}: ${p.body}`).join("\n");
+  } catch {
+    try {
+      const pol = await sql.query(
+        `SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name ILIKE '%policy%'`,
+        [],
+      );
+      void pol;
+    } catch { /* no policy table */ }
+  }
+  return { byId, byRef, byArea, payouts, areas, kpis: kpis[0], outputsByRun, policy };
+}
+
+function contextFor(
+  row: ScoreRow,
+  uni: Awaited<ReturnType<typeof loadUniverse>>,
+  output: unknown,
+): string {
+  const chunks: string[] = [];
+  if (row.scope) chunks.push(`SCOPE ${row.scope}`);
+  if (row.domain) chunks.push(`DOMAIN ${row.domain}`);
+  chunks.push(`KPI ${JSON.stringify(uni.kpis)}`);
+  chunks.push(`AREAS ${JSON.stringify(uni.areas)}`);
+  if (uni.policy) chunks.push(uni.policy.slice(0, 8000));
+
+  const blob = `${row.scope || ""}\n${typeof output === "string" ? output : JSON.stringify(output)}`;
+  const ids = exceptionIdsFrom(blob);
+  if (row.scope?.startsWith("exception:")) ids.unshift(row.scope.slice("exception:".length));
+
+  const seen = new Set<string>();
+  for (const id of ids) {
+    const e = uni.byId.get(id);
+    if (e && !seen.has(id)) {
+      seen.add(id);
+      chunks.push(JSON.stringify(e));
+    } else {
+      const ref = id.split(":").pop() || id;
+      for (const r of uni.byRef.get(ref) || []) {
+        const rid = String(r.exception_id);
+        if (!seen.has(rid)) {
+          seen.add(rid);
+          chunks.push(JSON.stringify(r));
+        }
+      }
+    }
+  }
+
+  const areaHint = row.domain || (row.scope && row.scope.split(":")[1]) || "";
+  const areasToInclude = new Set<string>();
+  if (areaHint && uni.byArea.has(areaHint)) areasToInclude.add(areaHint);
+  if (row.agent_id.startsWith("recon_")) {
+    const map: Record<string, string[]> = {
+      recon_authorization: ["authorization"],
+      recon_scheme: ["scheme"],
+      recon_network_gateway: ["network", "gateway"],
+      recon_partner: ["partner"],
+      recon_terminal: ["terminal"],
+      recon_bank: ["bank_trs"],
+      recon_apm: ["apm"],
+      recon_fx: ["fx"],
+      recon_billing: ["billing"],
+      recon_invoicing: ["invoicing"],
+      recon_cash: ["cash_ar"],
+      recon_vendor: ["vendor"],
+      recon_acquirer: ["acquirer"],
+      recon_gl: ["gl"],
+      recon_funding: ["funding"],
+      recon_settlement: ["settlement"],
+    };
+    for (const a of map[row.agent_id] || []) areasToInclude.add(a);
+  }
+  if (row.agent_id === "gap_detection" || row.agent_id === "orchestrator") {
+    for (const a of uni.byArea.keys()) areasToInclude.add(a);
+  }
+  for (const area of areasToInclude) {
+    const rows = uni.byArea.get(area) || [];
+    for (const r of rows.slice(0, 40)) {
+      const rid = String(r.exception_id);
+      if (!seen.has(rid)) {
+        seen.add(rid);
+        chunks.push(JSON.stringify(r));
+      }
+    }
+  }
+
+  for (const p of uni.payouts) {
+    const id = String((p as { payout_id: string }).payout_id);
+    if (blob.includes(id) || ids.some((x) => x.includes(id))) chunks.push(JSON.stringify(p));
+  }
+
+  const priors = uni.outputsByRun.get(row.run_id) || [];
+  for (const p of priors) {
+    if (p.output_id === row.output_id) continue;
+    chunks.push(`PRIOR ${p.agent_id} ${p.output_json}`);
+  }
+  return chunks.join("\n");
+}
+
 async function main() {
+  const already = await sql.query(
+    `SELECT COUNT(*)::int AS n FROM ra_eval_scores_archive WHERE archive_label=$1`,
+    [LABEL],
+  );
+  if (!Number(already[0]?.n)) {
+    await sql.query(
+      `INSERT INTO ra_eval_scores_archive
+         (archive_label, eval_id, run_id, output_id, agent_id, faithfulness, claims, supported, retries, verification, unsupported, created_at)
+       SELECT $1, eval_id, run_id, output_id, agent_id, faithfulness, claims, supported, retries, verification, unsupported, created_at
+         FROM ra_eval_scores`,
+      [LABEL],
+    );
+  } else if (process.env.RESCORE_RESTORE !== "0") {
+    // Start from the archived originals so a prior incomplete rescore is not the baseline.
+    await sql.query(
+      `UPDATE ra_eval_scores s
+          SET faithfulness = a.faithfulness,
+              claims = a.claims,
+              supported = a.supported,
+              retries = a.retries,
+              verification = a.verification,
+              unsupported = a.unsupported
+         FROM ra_eval_scores_archive a
+        WHERE a.eval_id = s.eval_id AND a.archive_label = $1`,
+      [LABEL],
+    );
+  }
+
   const beforeAgents = await sql.query(
     `SELECT agent_id, n, faithfulness, hallucination_rate, retries, unverified FROM v_ra_eval_quality ORDER BY agent_id`,
     [],
@@ -114,20 +240,7 @@ async function main() {
     [],
   );
 
-  const already = await sql.query(
-    `SELECT COUNT(*)::int AS n FROM ra_eval_scores_archive WHERE archive_label=$1`,
-    [LABEL],
-  );
-  if (!Number(already[0]?.n)) {
-    await sql.query(
-      `INSERT INTO ra_eval_scores_archive
-         (archive_label, eval_id, run_id, output_id, agent_id, faithfulness, claims, supported, retries, verification, unsupported, created_at)
-       SELECT $1, eval_id, run_id, output_id, agent_id, faithfulness, claims, supported, retries, verification, unsupported, created_at
-         FROM ra_eval_scores`,
-      [LABEL],
-    );
-  }
-
+  const uni = await loadUniverse();
   const rows = (await sql.query(
     `SELECT s.eval_id, s.run_id, s.output_id, s.agent_id, s.faithfulness, s.claims, s.supported, s.retries,
             s.verification, s.unsupported, s.created_at, o.output_json, o.domain, r.scope
@@ -143,7 +256,7 @@ async function main() {
   for (const row of rows) {
     const output = parseJson(row.output_json);
     const source = output && typeof output === "object" ? String((output as { source?: string }).source || "") : "";
-    const context = await factsFor(row.scope, output);
+    const context = contextFor(row, uni, output);
     const grounding = checkGrounding(output, context);
     const verification = verificationOf(row.verification, grounding.passed, source);
     const faithfulness = Math.round(grounding.faithfulness * 10000) / 10000;

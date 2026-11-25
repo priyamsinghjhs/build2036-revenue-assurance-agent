@@ -112,6 +112,14 @@ const HYPOTHESIS_KEYS = new Set([
   "hypothesis", "hypotheses", "hunch", "possible_cause", "possible_causes", "hunches",
 ]);
 
+/** Runtime telemetry and self-scores are not book facts. */
+const META_KEYS = new Set([
+  "timing", "latency", "usage", "tokens", "neon_ms", "ai_ms", "total_ms",
+  "cache_hit", "retries", "source", "verification", "faithfulness",
+  "unsupported", "claims", "supported", "error", "model",
+  "prompt_tokens", "completion_tokens", "eval_id",
+]);
+
 /** Split facts from labelled hypotheses / recommendation-only suggestions. */
 export function splitFactualOutput(output: unknown): { factual: unknown; hypotheses: unknown } {
   if (output == null || typeof output !== "object" || Array.isArray(output)) {
@@ -121,6 +129,7 @@ export function splitFactualOutput(output: unknown): { factual: unknown; hypothe
   const factual: Record<string, unknown> = {};
   const hypotheses: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(rec)) {
+    if (META_KEYS.has(k.toLowerCase())) continue;
     if (HYPOTHESIS_KEYS.has(k.toLowerCase())) {
       hypotheses[k] = v;
       continue;
