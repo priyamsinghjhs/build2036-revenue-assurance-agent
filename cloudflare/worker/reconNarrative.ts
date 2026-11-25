@@ -8,6 +8,7 @@
  */
 import { inrExact } from "../shared/money";
 import { checkGrounding, SENTENCE_TAG_RE } from "./grounding";
+import { matchQualityWith, DEFAULT_RECON_CONFIG } from "../shared/reconConfig";
 
 export type ReconPack = {
   area: string;
@@ -22,6 +23,10 @@ export type ReconPack = {
   rows_leakage?: number;
   total_items?: number;
   top_leakage_sum?: number;
+  rule_version?: number;
+  match_thresholds?: { match_good: number; match_watch: number };
+  matching_keys?: string[];
+  within_tolerance?: { n: number; leakage: number; by_rule?: Record<string, number> };
   top_exceptions: {
     exception_id: string;
     category: string;
@@ -33,11 +38,9 @@ export type ReconPack = {
   }[];
 };
 
-/** Thresholds are fixed so the label is reproducible from the SQL figures. */
-export function matchQualityOf(rate: number): "good" | "watch" | "poor" {
-  if (rate >= 0.98) return "good";
-  if (rate >= 0.9) return "watch";
-  return "poor";
+/** Thresholds come from the active rule config (defaults 0.98 / 0.90) so the label is reproducible. */
+export function matchQualityOf(rate: number, g = DEFAULT_RECON_CONFIG.global): "good" | "watch" | "poor" {
+  return matchQualityWith(rate, g);
 }
 
 function pct2(rate: number): string {
@@ -91,7 +94,11 @@ export function reconChecks(p: ReconPack): { checks: Check[]; confidence: number
   return { checks, confidence: Math.max(50, 95 - failed * 10) };
 }
 
-export function reconTemplateOutput(domain: string, packs: ReconPack[]): Record<string, unknown> {
+export function reconTemplateOutput(
+  domain: string,
+  packs: ReconPack[],
+  rules: { version?: number; global?: { match_good: number; match_watch: number } } = {},
+): Record<string, unknown> {
   if (!packs.length) {
     return {
       domain,
@@ -102,6 +109,10 @@ export function reconTemplateOutput(domain: string, packs: ReconPack[]): Record<
       source: "sql_template",
     };
   }
+  rules = {
+    version: rules.version ?? packs.find((p) => p.rule_version != null)?.rule_version,
+    global: rules.global ?? packs.find((p) => p.match_thresholds)?.match_thresholds,
+  };
   const sentences: string[] = [];
   const allChecks: Check[] = [];
   let conf = 95;
@@ -116,6 +127,11 @@ export function reconTemplateOutput(domain: string, packs: ReconPack[]): Record<
       );
     } else {
       sentences.push(`No leakage is booked for ${p.label}.`);
+    }
+    if (p.within_tolerance && p.within_tolerance.n > 0) {
+      sentences.push(
+        `${p.within_tolerance.n} exception rows totalling ${inrExact(p.within_tolerance.leakage)} are within the configured tolerance (rule version ${p.rule_version ?? rules.version ?? 0}) and are excluded from leakage.`,
+      );
     }
     const r = reconChecks(p);
     allChecks.push(...r.checks.map((c) => ({ ...c, check: packs.length > 1 ? `${p.label}: ${c.check}` : c.check })));
@@ -150,7 +166,7 @@ export function reconTemplateOutput(domain: string, packs: ReconPack[]): Record<
   return {
     domain,
     assessment: sentences.join(" "),
-    match_quality: matchQualityOf(rateMin),
+    match_quality: matchQualityOf(rateMin, rules.global),
     top_gaps: gaps,
     recommended_focus: top
       ? `Recommendation: start with ${top.issue} on ${top.ref}, the largest open item at ${inrExact(top.amount)}.`
@@ -159,6 +175,7 @@ export function reconTemplateOutput(domain: string, packs: ReconPack[]): Record<
     confidence: conf,
     confidence_basis: "Derived from reconciliation self-checks on the SQL figures (95 when all agree, minus 10 per failed check).",
     source: "sql_template",
+    ...(rules.version != null ? { rule_version: rules.version } : {}),
   };
 }
 

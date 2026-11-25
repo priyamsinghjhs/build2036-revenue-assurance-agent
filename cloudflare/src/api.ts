@@ -2,7 +2,28 @@ import { normalizeAmount } from "../shared/numbers";
 import { canonicalReviewAmount } from "../shared/reviewAmount";
 type RequestOpts = RequestInit & { timeoutMs?: number };
 
-async function request<T>(path: string, init?: RequestOpts): Promise<T> {
+let csrfTokenCache: string | null = null;
+
+/** Double-submit CSRF token for mutating calls. Fetched once per page load after sign-in. */
+async function csrf(refresh = false): Promise<string> {
+  if (csrfTokenCache && !refresh) return csrfTokenCache;
+  try {
+    const r = await fetch("/api/csrf", { credentials: "same-origin", headers: { Accept: "application/json" } });
+    if (!r.ok) return "";
+    const j = (await r.json()) as { token?: string };
+    csrfTokenCache = j.token || null;
+    return csrfTokenCache || "";
+  } catch {
+    return "";
+  }
+}
+
+async function request<T>(path: string, init?: RequestOpts, retried = false): Promise<T> {
+  const method = String(init?.method || "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD" && !path.startsWith("/api/auth/")) {
+    const token = await csrf();
+    if (token) init = { ...(init ?? {}), headers: { ...((init?.headers as Record<string, string>) ?? {}), "x-csrf-token": token } };
+  }
   const { timeoutMs, signal, ...rest } = init ?? {};
   const ac = new AbortController();
   const onAbort = () => ac.abort();
@@ -52,8 +73,17 @@ async function request<T>(path: string, init?: RequestOpts): Promise<T> {
       window.location.assign(`/login?next=${next}`);
     }
   }
+  if (response.status === 403 && !retried && method !== "GET" && /csrf/i.test(text)) {
+    await csrf(true);
+    return request<T>(path, init, true);
+  }
   if (!response.ok) {
-    const err = data as { error?: string; message?: string };
+    const err = data as { error?: string; message?: string; errors?: string[] };
+    if (Array.isArray(err?.errors) && err.errors.length) {
+      const e = new Error(`${err.error || "Invalid"}: ${err.errors.join("; ")}`) as Error & { status?: number };
+      e.status = response.status;
+      throw e;
+    }
     const error = new Error(err?.error || err?.message || `Request failed (${response.status})`) as Error & { status?: number };
     error.status = response.status;
     throw error;
@@ -61,7 +91,63 @@ async function request<T>(path: string, init?: RequestOpts): Promise<T> {
   return data as T;
 }
 
+export type RuleConfig = {
+  global: { match_good: number; match_watch: number };
+  areas: Record<string, { amount_tolerance: number; fx_tolerance_bps: number; fee_variance_bps: number; date_window_days: number; matching_keys: string[] }>;
+};
+export type RuleChange = { path: string; old: unknown; new: unknown };
+export type RulesResponse = {
+  active: { version: number; config: RuleConfig; proposed_by?: string; decided_by?: string; decided_at?: string };
+  proposals: { version: number; config: RuleConfig; note: string; proposed_by: string; proposed_at: string; base_version: number; changes: RuleChange[] }[];
+  defaults: RuleConfig;
+  limits: Record<string, { min: number; max: number }>;
+  areas: string[];
+  matching_key_columns: string[];
+};
+export type RuleHistoryRow = { id: number; version: number; action: string; actor: string; role: string; at: string; changes: RuleChange[]; note: string | null };
+export type RecoveryRow = {
+  exception_id: string; area: string; category: string; ref_id: string; merchant_id: string | null; ts: string | null;
+  state: string; potential_amount: number; expected_amount: number; recovered_amount: number; written_off_amount: number;
+  outstanding: number; owner: string | null; due_date: string | null; sla_days: number | null; version: number; overdue: boolean;
+  last_actor?: string | null; closed_at?: string | null;
+};
+export type RecoveryTotals = {
+  n?: number; tracked?: number; closed?: number; overdue?: number;
+  potential: number; recovered: number; written_off: number; open: number; recovery_rate: number;
+  by_state: Record<string, { n: number; expected: number; recovered: number }>;
+  check?: { book_leakage: number; potential_equals_book_leakage: boolean };
+  scoped?: boolean;
+};
+export type RecoveryHistoryRow = { id: number; from_state: string; to_state: string; amount_delta: number; recovered_total: number; owner: string | null; due_date: string | null; actor: string; role: string; note: string | null; at: string };
+export type ReconJob = {
+  job_id: string; status: string; scope: string; domain: string | null; mode: string; run_id: string | null; rule_version: number | null;
+  progress: { total: number; done: number; failed: number; pct: number };
+  steps?: { seq: number; agent_id: string; status: string; attempts: number; ms: number | null; error: string | null }[];
+  sequence?: string[];
+  outputs?: { agent_id: string; output: unknown }[];
+  error?: string | null; reused?: boolean; chunks?: number;
+};
+
 export const api = {
+  reconRules: () => request<RulesResponse>("/api/recon/rules"),
+  reconRuleHistory: () => request<{ history: RuleHistoryRow[] }>("/api/recon/rules/history"),
+  proposeReconRules: (body: { config: RuleConfig; note: string; base_version: number }) =>
+    request<{ ok: true; version: number; changes: RuleChange[] }>("/api/recon/rules/proposals", { method: "POST", body: JSON.stringify(body) }),
+  decideReconRules: (version: number, decision: "approve" | "reject", note: string) =>
+    request<{ ok: true; status: string }>(`/api/recon/rules/proposals/${version}/decision`, { method: "POST", body: JSON.stringify({ decision, note }) }),
+  recovery: (q: { state?: string; area?: string; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") p.set(k, String(v));
+    return request<{ totals: RecoveryTotals; rows: RecoveryRow[]; page: { offset: number; limit: number; total: number } }>(`/api/recovery${p.size ? `?${p}` : ""}`);
+  },
+  recoverySummary: () => request<RecoveryTotals>("/api/recovery/summary"),
+  recoveryItem: (id: string) =>
+    request<{ item: RecoveryRow; history: RecoveryHistoryRow[]; allowed_next: string[] }>(`/api/recovery/items/${encodeURIComponent(id)}`),
+  recoveryTransition: (id: string, body: { to: string; amount?: number; owner?: string; due_date?: string; note?: string; expected_version?: number }) =>
+    request<{ ok: true; to: string; version: number }>(`/api/recovery/items/${encodeURIComponent(id)}/transition`, { method: "POST", body: JSON.stringify(body) }),
+  createReconJob: (body: { scope: string; domain?: string; include_narrative?: boolean }, idempotencyKey: string) =>
+    request<ReconJob>("/api/recon/jobs", { method: "POST", body: JSON.stringify(body), headers: { "Idempotency-Key": idempotencyKey } }),
+  reconJob: (id: string, outputs = false) => request<ReconJob>(`/api/recon/jobs/${encodeURIComponent(id)}${outputs ? "?outputs=1" : ""}`),
   me: () => request<{ user: { id: string; role: string; name: string } }>("/api/auth/me"),
   login: (username: string, password: string) =>
     request<{ ok: true; user: { id: string; role: string; name: string } }>("/api/auth/login", {

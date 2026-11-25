@@ -8,7 +8,7 @@ import {
   type Node,
 } from "@xyflow/react";
 import { Play, RefreshCw } from "lucide-react";
-import { api, type ActionRow, type AutomationLog, type EvalQuality, type LatestRun, type Roster } from "@/api";
+import { api, type ActionRow, type AutomationLog, type EvalQuality, type LatestRun, type ReconJob, type Roster } from "@/api";
 import { SeverityBadge, StatusDot } from "@/components/SeverityBadge";
 import { Button } from "@/components/ui/button";
 import { formatConfidence, inr, prettyCat, pct } from "@/lib/format";
@@ -45,25 +45,6 @@ const DOMAINS = [
 type StepStatus = "idle" | "running" | "done" | "cached" | "error";
 
 
-function batchAgentSequence(sequence: string[]): string[][] {
-  const batches: string[][] = [];
-  let i = 0;
-  if (sequence[0] === "orchestrator") {
-    batches.push(["orchestrator"]);
-    i = 1;
-  }
-  const recon: string[] = [];
-  while (i < sequence.length && sequence[i].startsWith("recon_")) {
-    recon.push(sequence[i]);
-    i += 1;
-  }
-  for (let j = 0; j < recon.length; j += 4) batches.push(recon.slice(j, j + 4));
-  while (i < sequence.length) {
-    batches.push([sequence[i]]);
-    i += 1;
-  }
-  return batches;
-}
 
 export default function AgentsPage() {
   const { can } = useAuth();
@@ -80,6 +61,7 @@ export default function AgentsPage() {
   const [autoBusy, setAutoBusy] = useState(false);
   const [autoLog, setAutoLog] = useState<AutomationLog | null>(null);
   const [quality, setQuality] = useState<EvalQuality | null>(null);
+  const [jobInfo, setJobInfo] = useState<ReconJob | null>(null);
 
   const loadCached = useCallback(async (scope: string) => {
     const [{ latest: cached }, act] = await Promise.all([api.latest(scope), api.actions()]);
@@ -137,62 +119,56 @@ export default function AgentsPage() {
     setActions(act.actions);
   }
 
+  /**
+   * Recon runs as a background job: POST returns 202 with a job id, the Worker
+   * processes it in chunks (ctx.waitUntil, advanced by these polls and the cron),
+   * and this page only polls status. Nothing heavy runs on the request path.
+   */
   async function runPipeline() {
     if (!roster) return;
     setBusy(true);
     setError("");
+    setJobInfo(null);
     try {
-      const started = await api.startRun({ scope: domain, domain: domain === "all" ? undefined : domain });
-      setRunId(started.run_id);
-      const nextStatus: Record<string, StepStatus> = {};
-      const nextOut: Record<string, unknown> = {};
-      for (const id of started.sequence) nextStatus[id] = "idle";
-      setStatus({ ...nextStatus });
+      const key = `run-${domain}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const job = await api.createReconJob({ scope: domain, domain: domain === "all" ? undefined : domain }, key);
+      setRunId(job.run_id);
+      setJobInfo(job);
       setOutputs({});
-      for (const batch of batchAgentSequence(started.sequence)) {
-        setActive(batch[0] ?? "");
-        setStatus((s) => {
-          const next = { ...s };
-          for (const agentId of batch) next[agentId] = "running";
-          return next;
-        });
-        const steps = await Promise.all(
-          batch.map((agentId) =>
-            api.step({
-              run_id: started.run_id,
-              agent_id: agentId,
-              scope: domain,
-              domain: domain === "all" ? "" : domain,
-            }).then((step) => ({ agentId, step })),
-          ),
-        );
-        for (const { agentId, step } of steps) {
-          nextOut[agentId] = step.output;
+      const seq = job.sequence ?? (job.steps ?? []).map((s) => s.agent_id);
+      setStatus(Object.fromEntries(seq.map((id) => [id, "idle" as StepStatus])));
+      let cur = job;
+      const deadline = Date.now() + 10 * 60_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1200));
+        cur = await api.reconJob(job.job_id, true);
+        setJobInfo(cur);
+        const st: Record<string, StepStatus> = {};
+        for (const s of cur.steps ?? []) {
+          st[s.agent_id] = s.status === "done" ? "done" : s.status === "running" ? "running" : s.status === "failed" ? "error" : "idle";
         }
-        setOutputs((o) => {
-          const merged = { ...o };
-          for (const { agentId, step } of steps) merged[agentId] = step.output;
-          return merged;
-        });
-        setStatus((s) => {
-          const next = { ...s };
-          for (const { agentId } of steps) next[agentId] = "done";
-          return next;
-        });
+        setStatus(st);
+        const running = (cur.steps ?? []).find((s) => s.status === "running");
+        if (running) setActive(running.agent_id);
+        if (cur.outputs) setOutputs(Object.fromEntries(cur.outputs.map((o) => [o.agent_id, o.output])));
+        if (cur.status === "succeeded" || cur.status === "failed") break;
       }
-      await api.complete(started.run_id);
+      if (cur.status === "failed") setError("The background recon job failed. Check the step errors and retry.");
+      else if (cur.status !== "succeeded") setError("The job is still running in the background. Refresh later to see results.");
       const act = await api.actions();
       setActions(act.actions);
-      setLatest({
-        run: { run_id: started.run_id, status: "completed" },
-        outputs: started.sequence.map((id) => ({
-          agent_id: id,
-          domain: domain === "all" ? null : domain,
-          output: nextOut[id],
-          created_at: new Date().toISOString(),
-        })),
-        actions: act.actions.filter((a) => a.run_id === started.run_id),
-      });
+      if (cur.run_id) {
+        setLatest({
+          run: { run_id: cur.run_id, status: cur.status === "succeeded" ? "completed" : cur.status },
+          outputs: (cur.outputs ?? []).map((o) => ({
+            agent_id: o.agent_id,
+            domain: domain === "all" ? null : domain,
+            output: o.output,
+            created_at: new Date().toISOString(),
+          })),
+          actions: act.actions.filter((a) => a.run_id === cur.run_id),
+        });
+      }
     } catch (e) {
       setError(publicErrorMessage(e));
     } finally {
@@ -339,6 +315,17 @@ export default function AgentsPage() {
         <p className="text-xs text-muted">
           Last automatic run: {String(autoLog.status)} at {new Date(autoLog.started_at).toLocaleString("en-IN", { timeZone: "Asia/Calcutta" })} IST
         </p>
+      )}
+      {jobInfo && (
+        <div className="space-y-1" data-testid="recon-job-progress">
+          <div className="flex justify-between text-[11px] text-muted">
+            <span>Background job {jobInfo.job_id.slice(0, 8)} · {jobInfo.status}{jobInfo.rule_version != null ? ` · rules v${jobInfo.rule_version}` : ""}</span>
+            <span className="tabular-nums">{jobInfo.progress.done + jobInfo.progress.failed}/{jobInfo.progress.total} steps · {jobInfo.progress.pct}%</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded bg-slate-100">
+            <div className={`h-full ${jobInfo.status === "failed" ? "bg-red-600" : "bg-blue-600"}`} style={{ width: `${jobInfo.progress.pct}%` }} />
+          </div>
+        </div>
       )}
       {runId && <p className="text-[11px] text-muted">Run {runId}</p>}
       {latest?.run && (

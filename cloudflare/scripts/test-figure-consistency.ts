@@ -182,4 +182,40 @@ for (const item of items) {
 }
 if (reviewProblems.length) throw new Error(reviewProblems.join("\n"));
 
-console.log(`test-figure-consistency: overlay, exec invariants, ${items.length} review items ok`);
+// --- recovery tracker vs executive (same SQL book) ---
+type RecTotals = { potential: number; recovered: number; written_off: number; open: number; recovery_rate: number; by_state: Record<string, { n: number; expected: number }>; n?: number };
+export function assertRecoveryConsistency(exec: ExecLike, rec: RecTotals): string[] {
+  const problems: string[] = [];
+  const check = (cond: boolean, msg: string) => { if (!cond) problems.push(msg); };
+  check(Math.abs(rec.potential - exec.kpis.leakage) <= 0.009, `recovery potential ${rec.potential} != exec book leakage ${exec.kpis.leakage}`);
+  if (rec.n != null) check(rec.n === exec.kpis.exception_count, `recovery items ${rec.n} != exec exceptions ${exec.kpis.exception_count}`);
+  check(Math.abs(rec.open - normalizeAmount(rec.potential - rec.recovered - rec.written_off)) <= 0.009, "open != potential - recovered - written off");
+  const stateSum = normalizeAmount(Object.values(rec.by_state).reduce((s, b) => s + Number(b.expected || 0), 0));
+  check(Math.abs(stateSum - rec.potential) <= 0.009, `state buckets ${stateSum} != potential ${rec.potential}`);
+  const stateN = Object.values(rec.by_state).reduce((s, b) => s + Number(b.n || 0), 0);
+  if (rec.n != null) check(stateN === rec.n, `state counts ${stateN} != items ${rec.n}`);
+  const rate = rec.potential > 0 ? Math.round((rec.recovered / rec.potential) * 10_000) / 10_000 : 0;
+  check(Math.abs(rate - rec.recovery_rate) < 1e-9, `recovery rate ${rec.recovery_rate} != ${rate}`);
+  return problems;
+}
+const recProblems = assertRecoveryConsistency(exec, {
+  potential: exec.kpis.leakage,
+  recovered: 0,
+  written_off: 0,
+  open: exec.kpis.leakage,
+  recovery_rate: 0,
+  n: exec.kpis.exception_count,
+  by_state: { identified: { n: exec.kpis.exception_count, expected: exec.kpis.leakage } },
+});
+if (recProblems.length) throw new Error("recovery consistency failed:\n" + recProblems.join("\n"));
+const badRec = assertRecoveryConsistency(exec, {
+  potential: exec.kpis.leakage + 1,
+  recovered: 0,
+  written_off: 0,
+  open: exec.kpis.leakage,
+  recovery_rate: 0,
+  by_state: {},
+});
+if (badRec.length < 2) throw new Error("recovery consistency must flag a potential/book mismatch");
+
+console.log(`test-figure-consistency: overlay, exec invariants, recovery vs exec, ${items.length} review items ok`);

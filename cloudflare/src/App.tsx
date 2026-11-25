@@ -59,6 +59,8 @@ import FilesPage from "@/pages/FilesPage";
 import IngestionPage from "@/pages/IngestionPage";
 import ReviewQueuePage from "@/pages/ReviewQueuePage";
 import ReviewPage from "@/pages/ReviewPage";
+import RecoveryPage from "@/pages/RecoveryPage";
+import ReconRulesPage from "@/pages/ReconRulesPage";
 import ModelsPage from "@/pages/ModelsPage";
 import OpenDataPage from "@/pages/OpenDataPage";
 import SettingsPage from "@/pages/SettingsPage";
@@ -104,6 +106,7 @@ const GROUPS = [
     items: [
       { to: "/controls", label: "Control library", icon: Shield },
       { to: "/config", label: "Config & rules", icon: SlidersHorizontal },
+      { to: "/recon-rules", label: "Recon rules", icon: SlidersHorizontal },
       { to: "/kyc", label: "KYC & profile", icon: IdCard },
     ],
   },
@@ -146,6 +149,7 @@ const GROUPS = [
       { to: "/agents", label: "Agents & queue", icon: Bot },
       { to: "/investigate", label: "Investigate", icon: Search },
       { to: "/review", label: "Review queue", icon: Scale },
+      { to: "/recovery", label: "Recovery tracker", icon: Coins },
       { to: "/trace", label: "Transaction trace", icon: ScanSearch },
     ],
   },
@@ -422,6 +426,8 @@ function Shell() {
             <Route path="/ingestion" element={<IngestionPage />} />
             <Route path="/review" element={<ReviewQueuePage />} />
             <Route path="/review/:id" element={<ReviewPage />} />
+            <Route path="/recovery" element={<RecoveryPage />} />
+            {can("settings") || can("approve_review") ? <Route path="/recon-rules" element={<ReconRulesPage />} /> : null}
             <Route path="/:slug" element={<AreaPage />} />
           </Routes>
         </main>

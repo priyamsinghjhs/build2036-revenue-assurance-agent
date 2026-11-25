@@ -13,7 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { Printer } from "lucide-react";
-import { api, type Executive } from "@/api";
+import { api, type Executive, type RecoveryTotals } from "@/api";
 import { CategoryTick, chartMargin, TruncTick } from "@/components/ChartKit";
 import { KpiCard } from "@/components/KpiCard";
 import { ActionNeededCard, ExecHeroTile } from "@/components/ExecHeroTile";
@@ -33,11 +33,13 @@ function heatColor(match: number): string {
 
 export default function ExecutivePage() {
   const [data, setData] = useState<Executive | null>(null);
+  const [recovery, setRecovery] = useState<RecoveryTotals | null>(null);
   const [error, setError] = useState("");
   const { isFiltered } = useFilters();
 
   useEffect(() => {
     api.executive().then(setData).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    api.recoverySummary().then(setRecovery).catch(() => undefined);
   }, []);
 
   if (error) return <p className="text-danger">{error}</p>;
@@ -142,6 +144,27 @@ export default function ExecutivePage() {
           tone="warn"
         />
       </div>
+
+      {recovery && (
+        <Card data-testid="exec-recovery-tracker">
+          <CardHeader>
+            <CardTitle>Recovery to closure</CardTitle>
+            <CardDescription>
+              Tracked recoveries against potential (book leakage). SQL over the recovery tracker
+              {recovery.check && !recovery.check.potential_equals_book_leakage ? " — potential does not match book leakage, check the data" : ""}.{" "}
+              <Link to="/recovery" className="text-accent hover:underline">Open tracker</Link>
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard label="Potential" value={inr(recovery.potential, true)} hint={`${recovery.n ?? 0} book exceptions`} />
+              <KpiCard label="Recovered (tracked)" value={inr(recovery.recovered, true)} hint={`${recovery.closed ?? 0} closed`} tone="ok" />
+              <KpiCard label="Recovery rate" value={pct(recovery.recovery_rate, 2)} hint="recovered ÷ potential" />
+              <KpiCard label="Open" value={inr(recovery.open, true)} hint={`written off ${inr(recovery.written_off, true)} · ${recovery.overdue ?? 0} overdue`} tone="warn" />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2" data-testid="exec-recovery">
         <Card>
