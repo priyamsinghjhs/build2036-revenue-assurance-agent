@@ -39,8 +39,12 @@ declare class URLSearchParams {
   entries(): IterableIterator<[string, string]>;
 }
 declare class URL {
-  constructor(url: string);
+  constructor(url: string, base?: string);
   readonly searchParams: URLSearchParams;
+  readonly origin: string;
+  readonly pathname: string;
+  readonly protocol: string;
+  readonly host: string;
   toString(): string;
 }
 declare class AbortSignal { static timeout(ms: number): AbortSignal; }
