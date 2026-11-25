@@ -36,7 +36,7 @@ import {
   Database,
   Settings,
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AuthProvider, useAuth } from "@/auth";
 import LoginPage from "@/pages/LoginPage";
 import UsersPage from "@/pages/UsersPage";
@@ -70,6 +70,9 @@ import { Select } from "@/components/ui/select";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TITLES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
+import { APP_NAME } from "@/brand";
+import { BrandMark } from "@/components/BrandMark";
+import { AppFooter } from "@/components/AppFooter";
 
 const GROUPS = [
   {
@@ -168,11 +171,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const groups = GROUPS.map((g) => ({ ...g, items: g.items.filter((item) => navVisible(item.to)) })).filter((g) => g.items.length);
   return (
     <div className="flex h-full flex-col">
-      <div className="px-5 py-5">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-200">Acquiring RA</div>
-        <div className="mt-1 text-sm font-semibold text-white">Revenue assurance</div>
-      </div>
-      <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 pb-6" aria-label="Primary">
+      <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 pb-6 pt-4" aria-label="Primary">
         {groups.map((g) => (
           <div key={g.label}>
             <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{g.label}</div>
@@ -329,6 +328,21 @@ function FilterBar() {
   );
 }
 
+function pageTitle(pathname: string): string {
+  if (TITLES[pathname]) return TITLES[pathname];
+  if (pathname.startsWith("/review/")) return "Human review";
+  if (pathname.startsWith("/investigate/")) return "Exception";
+  const slug = pathname.replace(/^\//, "");
+  return slug || "Page";
+}
+
+function usePageTitle() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    document.title = `${pageTitle(pathname)} — ${APP_NAME}`;
+  }, [pathname]);
+}
+
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   const { pathname, search } = useLocation();
@@ -346,56 +360,64 @@ function Shell() {
   const showFilters = pathHonoursFilters(pathname);
   const { user, logout, can } = useAuth();
   return (
-    <div className="flex min-h-screen">
-      <aside className="hidden w-60 shrink-0 bg-navy-900 text-white md:block print:hidden">
-        <Sidebar />
-      </aside>
-      {open && (
-        <div className="fixed inset-0 z-40 md:hidden print:hidden">
-          <button type="button" className="absolute inset-0 bg-navy-950/40" aria-label="Close menu" onClick={() => setOpen(false)} />
-          <aside className="relative z-50 h-full w-64 bg-navy-900 text-white shadow-xl">
-            <button type="button" className="absolute right-3 top-3 rounded-md p-1 text-slate-300" aria-label="Close" onClick={() => setOpen(false)}>
-              <X className="h-4 w-4" />
-            </button>
-            <Sidebar onNavigate={() => setOpen(false)} />
-          </aside>
-        </div>
-      )}
-      <div className="min-w-0 flex-1">
-        <header className="topbar no-print border-b border-line bg-white">
-          <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 md:px-8">
-            <button type="button" className="rounded-md p-1 text-ink md:hidden" aria-label="Open menu" onClick={() => setOpen(true)}>
-              <Menu className="h-5 w-5" />
-            </button>
-            <div className="min-w-0 flex-1">
-              <Breadcrumb />
-            </div>
-            <span className="hidden rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-warning sm:inline">
+    <div className="flex min-h-screen flex-col">
+      <header className="brand-bar sticky top-0 z-50 h-14 shrink-0 bg-navy-900 text-white shadow-sm">
+        <div className="flex h-full items-center gap-3 px-3 md:px-4">
+          <button type="button" className="rounded-md p-1 text-white md:hidden" aria-label="Open menu" onClick={() => setOpen(true)}>
+            <Menu className="h-5 w-5" />
+          </button>
+          <BrandMark />
+          <div className="ml-auto flex items-center gap-2 print:hidden">
+            <span className="hidden rounded-full border border-gold-400/40 bg-white/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-gold-200 sm:inline">
               Synthetic book
             </span>
             {user ? (
-              <div className="flex items-center gap-2 print:hidden">
-                <span className="hidden max-w-[160px] truncate text-xs text-muted sm:inline" data-testid="header-user">
+              <>
+                <span className="hidden max-w-[160px] truncate text-xs text-slate-200 sm:inline" data-testid="header-user">
                   {user.id}
                 </span>
                 <button
                   type="button"
-                  className="rounded-md border border-line px-2 py-1 text-xs text-ink hover:bg-slate-50"
+                  className="rounded-md border border-white/20 px-2 py-1 text-xs text-white hover:bg-white/10"
                   onClick={() => void logout().then(() => { window.location.assign("/login"); })}
                   data-testid="logout"
                 >
                   Sign out
                 </button>
-              </div>
+              </>
             ) : null}
           </div>
-          {showFilters ? (
-            <div className="mx-auto max-w-6xl border-t border-line px-4 py-3 md:px-8">
-              <FilterBar />
+        </div>
+      </header>
+      <div className="flex min-h-0 flex-1">
+        <aside className="hidden w-60 shrink-0 bg-navy-900 text-white md:block print:hidden">
+          <Sidebar />
+        </aside>
+        {open && (
+          <div className="fixed inset-x-0 bottom-0 top-14 z-40 md:hidden print:hidden">
+            <button type="button" className="absolute inset-0 bg-navy-950/40" aria-label="Close menu" onClick={() => setOpen(false)} />
+            <aside className="relative z-50 h-full w-64 bg-navy-900 text-white shadow-xl">
+              <button type="button" className="absolute right-3 top-3 rounded-md p-1 text-slate-300" aria-label="Close" onClick={() => setOpen(false)}>
+                <X className="h-4 w-4" />
+              </button>
+              <Sidebar onNavigate={() => setOpen(false)} />
+            </aside>
+          </div>
+        )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="topbar no-print border-b border-line bg-white">
+            <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 md:px-8">
+              <div className="min-w-0 flex-1">
+                <Breadcrumb />
+              </div>
             </div>
-          ) : null}
-        </header>
-        <main id="main" className="mx-auto max-w-6xl p-4 md:p-8">
+            {showFilters ? (
+              <div className="mx-auto max-w-6xl border-t border-line px-4 py-3 md:px-8">
+                <FilterBar />
+              </div>
+            ) : null}
+          </header>
+          <main id="main" className="mx-auto w-full max-w-6xl flex-1 p-4 md:p-8">
           <Routes>
             <Route path="/" element={<ExecutivePage />} />
             <Route path="/lifecycle" element={<SystemMapPage />} />
@@ -430,13 +452,16 @@ function Shell() {
             {can("settings") || can("approve_review") ? <Route path="/recon-rules" element={<ReconRulesPage />} /> : null}
             <Route path="/:slug" element={<AreaPage />} />
           </Routes>
-        </main>
+          </main>
+        </div>
       </div>
+      <AppFooter />
     </div>
   );
 }
 
 function AppRoutes() {
+  usePageTitle();
   const { pathname } = useLocation();
   if (pathname === "/login") return <LoginPage />;
   return (

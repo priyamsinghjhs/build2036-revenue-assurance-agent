@@ -43,7 +43,7 @@ export default function Overview() {
     <div className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Revenue assurance</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Kosha Kshema Revenue Assurance</h1>
           <p className="text-sm text-slate-400">Payment lifecycle recon · synthetic October 2026 book</p>
         </div>
         <div className="flex items-center gap-2">
