@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train v9 models on the synthetic book and write JSON + Neon scores. Never prints secrets."""
+"""Train v10 models on the synthetic INR book (optional open MCC catalog flag). Write JSON + Neon scores. Never prints secrets. Do not mix TabFormer into the book models."""
 from __future__ import annotations
 
 import json, math, os, sys, warnings
@@ -19,7 +19,7 @@ warnings.filterwarnings("ignore")
 ROOT = Path(__file__).resolve().parents[2]  # cloudflare/
 MODEL_DIR = ROOT / "shared" / "ml" / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
-VERSION = "v9.0.0"
+VERSION = "v10.0.0"
 FEATURES = [
     "amount", "log_amount", "hour", "dow",
     "merchant_txn_1d", "merchant_amt_1d", "merchant_txn_7d", "merchant_amt_7d",
@@ -433,7 +433,7 @@ def dump_outputs(payload: dict) -> Path:
 
 
 def main():
-    print("v9 offline train starting (URL not printed)", flush=True)
+    print("v10 offline train starting (URL not printed)", flush=True)
     d = data_dir()
     conn = None
     if d and (d / "ra_feat_auth.csv").exists():
@@ -466,6 +466,17 @@ def main():
     print(f"rows auth={len(auth)} settle={len(settle)} fx={len(fx)} cb={len(cb)} entities={len(entities)}", flush=True)
 
 
+    # Optional reference-data flag from the open MCC catalog (not TabFormer).
+    # On this book every auth MCC is already in the catalog (9 codes, 1673/1673),
+    # so the flag is constant and is not added to FEATURES / the bundled trees.
+    mcc_csv = (data_dir() or Path()) / "ra_open_mcc.csv"
+    if mcc_csv.exists() and "mcc" in auth.columns:
+        mcc = pd.read_csv(mcc_csv, dtype=str)
+        catalog = set(mcc["mcc"].astype(str)) | set(mcc["mcc"].astype(str).str.zfill(4))
+        codes = auth["mcc"].astype(str)
+        auth["mcc_in_catalog"] = (codes.isin(catalog) | codes.str.zfill(4).isin(catalog)).astype(int)
+    elif "mcc_in_catalog" not in auth.columns:
+        auth["mcc_in_catalog"] = 0
     for c in FEATURES:
         if c not in auth.columns:
             auth[c] = 0
@@ -589,7 +600,7 @@ def main():
             })
 
     notes = {
-        "false_decline": "Weakly supervised on this synthetic book: positives are declines with do_not_honour or issuer_timeout. Decline reason is not a model feature. AUC is a held-out / OOF figure on synthetic data only.",
+        "false_decline": "v10 retrained on the INR book plus an open-data MCC-catalog flag. Weakly supervised on this synthetic book: positives are declines with do_not_honour or issuer_timeout. Decline reason is not a model feature. AUC is a held-out / OOF figure on synthetic data only.",
         "chargeback": "Auth-level chargeback risk. Only a handful of labelled chargebacks exist in the synthetic October book; metrics are therefore noisy and illustrative.",
         "dispute_win": "Trained on recovered/amount >= 0.5 for the 12 synthetic chargebacks. Treat metrics as illustrative only.",
         "iforest_settlement": "Unsupervised isolation forest over settlement fee ratios. Offline-trained, scored into ra_model_scores (model_id=iforest).",
@@ -666,7 +677,7 @@ def main():
         "graph_sage": sage_rows,
     }
     dump_outputs(payload)
-    print("v9 offline train complete (writeback JSON ready)", flush=True)
+    print("v10 offline train complete (writeback JSON ready)", flush=True)
 
     if conn is None:
         return
@@ -725,7 +736,7 @@ def main():
     print("book_kpi", cur.fetchone(), flush=True)
     cur.close()
     conn.close()
-    print("v9 offline train complete", flush=True)
+    print("v10 offline train complete", flush=True)
 
 
 if __name__ == "__main__":

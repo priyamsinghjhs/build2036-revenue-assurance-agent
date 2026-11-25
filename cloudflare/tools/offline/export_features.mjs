@@ -37,6 +37,7 @@ const queries = {
   ra_risk_entities: "SELECT entity_id, entity_type, merchant_id, risk_score, is_known_bad FROM ra_risk_entities",
   ra_risk_edges: "SELECT src, dst, rel, weight FROM ra_risk_edges",
   ra_captures: "SELECT capture_id, auth_id FROM ra_captures",
+  ra_open_mcc: "SELECT mcc, edited_description, combined_description FROM ra_open_mcc",
 };
 
 for (const [name, q] of Object.entries(queries)) {

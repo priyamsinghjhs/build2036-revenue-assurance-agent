@@ -98,6 +98,7 @@ async function sectionLiveApi() {
     ["/api/dashboard/overview", (b) => b || true],
     ["/api/models", (b) => Array.isArray(b.cards) && b.kpis],
     ["/api/areas/false_declines", (b) => b.summary || b.exceptions || b.meta],
+    ["/api/open-data", (b) => Array.isArray(b.datasets) && b.figures && b.guard],
   ];
   const latencies = [];
   let fail = 0;
@@ -609,7 +610,7 @@ const PAGES = [
   "/", "/lifecycle", "/agents", "/investigate", "/controls", "/trace", "/network-risk",
   "/contracts", "/anomalies", "/routing", "/ask", "/cases", "/risks", "/files",
   "/ingestion", "/review", "/authorization", "/scheme", "/bank", "/fees", "/aml", "/tax", "/kyc",
-  "/models", "/false-declines",
+  "/models", "/false-declines", "/open-data",
 ];
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const errors = [];
@@ -719,6 +720,24 @@ for (const w of WIDTHS) {
       });
       if (!ask.ok) errors.push({ w, type: "ask", msg: "Ask page missing answer, table, rupee figures or SQL", url: path, detail: ask.text });
       await page.screenshot({ path: "/workspace/verify/fix-ask.png", fullPage: true });
+    }
+    if (w === 1440 && path === "/open-data") {
+      await page.getByTestId("open-data-page").waitFor({ timeout: 15000 }).catch(() => {});
+      const od = await page.evaluate(() => {
+        const pageEl = document.querySelector('[data-testid="open-data-page"]');
+        const rows = document.querySelectorAll('[data-testid="open-data-row"]');
+        const text = pageEl ? (pageEl.innerText || "") : (document.body.innerText || "");
+        const hasPsi = /rbi|psi/i.test(text);
+        const blocked = /block|waf|unavailable|0 rows|empty/i.test(text);
+        const hasLicense = /CDLA|Apache|Unlicense|ISO 4217|attribution/i.test(text);
+        const hasRows = /\\d/.test(text);
+        return { hasPage: !!pageEl, n: rows.length, hasPsi, blocked, hasLicense, hasRows, snippet: text.slice(0, 300) };
+      });
+      if (!od.hasPage) errors.push({ w, type: "open-data", msg: "Open data sources page missing", url: "/open-data" });
+      if (od.n < 3) errors.push({ w, type: "open-data", msg: "Expected several source rows, got " + od.n, url: "/open-data" });
+      if (!od.hasLicense) errors.push({ w, type: "open-data", msg: "License/attribution missing", url: "/open-data" });
+      if (!od.hasPsi) errors.push({ w, type: "open-data", msg: "RBI PSI row/notes missing", url: "/open-data" });
+      await page.screenshot({ path: "/workspace/verify/v10-open-data.png", fullPage: true });
     }
     if (w === 1440 && path === "/investigate") {
       const payout = "/investigate/" + encodeURIComponent("payouts:under_payout:PAY-MER002-2026-10");
@@ -927,6 +946,136 @@ async function sectionTypecheck() {
   return ok;
 }
 
+
+function pctile(values, p) {
+  const s = [...values].filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+  if (!s.length) return null;
+  const idx = Math.min(s.length - 1, Math.max(0, Math.ceil((p / 100) * s.length) - 1));
+  return s[idx];
+}
+
+function summarize(label, values) {
+  const s = [...values].filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+  if (!s.length) return { label, n: 0 };
+  return { label, n: s.length, min: s[0], p50: pctile(s, 50), p95: pctile(s, 95), max: s[s.length - 1], mean: Math.round(s.reduce((a, b) => a + b, 0) / s.length) };
+}
+
+async function sectionPerf() {
+  const execMs = [];
+  let leakage = null, exceptions = null;
+  for (let i = 0; i < 8; i++) {
+    const r = await api("/api/executive");
+    execMs.push(r.ms);
+    if (r.ok) {
+      leakage = r.body?.kpis?.leakage;
+      exceptions = r.body?.kpis?.exception_count;
+    }
+  }
+  const exec = summarize("executive", execMs);
+  const execOk = exec.p95 != null && exec.p95 < 3000 && nearly(leakage, 994298.01);
+
+  const agentMs = [];
+  for (let i = 0; i < 5; i++) {
+    const t0 = Date.now();
+    const parts = await Promise.all([
+      api("/api/agents/roster"),
+      api("/api/agents/latest?scope=all"),
+      api("/api/actions"),
+      api("/api/eval/quality"),
+    ]);
+    agentMs.push(Date.now() - t0);
+    if (parts.some((p) => !p.ok)) agentMs[agentMs.length - 1] = 99999;
+  }
+  const agents = summarize("agents_page", agentMs);
+  const agentsOk = agents.p95 != null && agents.p95 < 3000;
+
+  const detMs = [];
+  const auditorMs = [];
+  const eid = "config:config_unapproved:CFG-003";
+  let groundingOk = 0;
+  let groundedN = 0;
+  for (let i = 0; i < 4; i++) {
+    const ev = await api(`/api/agents/evidence?exception_id=${encodeURIComponent(eid)}`);
+    const r = await api("/api/agents/investigate", {
+      method: "POST",
+      body: JSON.stringify({ exception_id: eid, domain: "config", mode: "deterministic" }),
+    });
+    detMs.push(r.ms);
+    const aud = r.body?.outputs?.auditor || {};
+    const inv = r.body?.outputs?.investigator || {};
+    auditorMs.push(Number(aud.timing?.total_ms ?? r.body?.timings?.auditor?.total_ms ?? r.ms));
+    const faith = Number(inv.faithfulness ?? aud.faithfulness ?? 1);
+    const ver = String(aud.verification || inv.verification || "");
+    groundedN += 1;
+    const leak = Number(ev.body?.exception?.leakage ?? ev.body?.exception?.leakage_amount ?? 0);
+    if ((ver === "grounded" || ver === "deterministic_replacement" || faith >= 1) && (!leak || nearly(leak, 2028.36, 0.05))) groundingOk += 1;
+    if (!r.ok) detMs[detMs.length - 1] = 99999;
+  }
+  const det = summarize("investigate_deterministic", detMs);
+  const auditor = summarize("auditor_step", auditorMs);
+  const detOk = det.p95 != null && det.p95 < 8000;
+  const audOk = auditor.p95 != null && auditor.p95 < 5000;
+
+  const cron = await api("/api/automation/latest");
+  const cronMs = Number(cron.body?.latest?.duration_ms ?? cron.body?.duration_ms ?? 0);
+  // Daily cron is deterministic; allow a generous budget.
+  const cronOk = !cronMs || cronMs < 20000;
+
+  const report = { generated_at: new Date().toISOString(), exec, agents, det, auditor, cron_ms: cronMs, leakage, exceptions, grounding: { ok: groundingOk, n: groundedN } };
+  writeFileSync(`${RESULTS}/perf-after.json`, JSON.stringify(report, null, 2));
+  writeFileSync("/workspace/verify/perf-after.json", JSON.stringify(report, null, 2));
+  const ok = execOk && agentsOk && detOk && audOk && cronOk;
+  card.add("investigator", { technical: detOk ? "pass" : "fail", detail: `det investigate p50=${det.p50} p95=${det.p95} (budget 8000)` });
+  card.add("auditor", { technical: audOk && groundingOk === groundedN ? "pass" : "fail", detail: `auditor step p95=${auditor.p95}; grounded ${groundingOk}/${groundedN}` });
+  card.notes.push(`Perf budgets exec p95=${exec.p95} (3000) agents p95=${agents.p95} (3000) det p95=${det.p95} (8000) auditor p95=${auditor.p95} (5000) cron ${cronMs}ms; leakage=${leakage}`);
+  if (!ok) card.remaining.push(`Latency budget missed: ${JSON.stringify(report)}`);
+  return ok;
+}
+
+async function sectionOpenData() {
+  const r = await api("/api/open-data");
+  const b = r.body || {};
+  const f = b.figures || {};
+  const ds = b.datasets || [];
+  const psi = ds.find((d) => /rbi|psi/i.test(String(d.dataset_id) + String(d.title) + String(d.notes)));
+  const tab = Number(f.tabformer?.n ?? 0);
+  const edges = Number(f.aml?.edges ?? 0);
+  const scores = Number(f.aml?.scores?.n ?? 0);
+  const leakOk = nearly(b.guard?.book_leakage, 994298.01);
+  const notesOk = psi && /block|waf|unavailable|not loaded|0/i.test(String(psi.notes) + " " + String(psi.row_count));
+  const sizeOk = !f.db_size || Number(f.db_size.bytes) < 350 * 1024 * 1024;
+  const ok = r.ok && ds.length >= 5 && tab === 100000 && edges === 30000 && leakOk && notesOk && sizeOk;
+  card.add("learning", {
+    functional: ok ? "pass" : "fail",
+    detail: `open-data datasets=${ds.length} tabformer=${tab} aml=${edges} scores=${scores} rbi_psi=${psi?.row_count ?? "?"} guard_ok=${leakOk} ${r.ms}ms`,
+  });
+  if (!ok) card.remaining.push(`Open data API unexpected: status=${r.status} datasets=${ds.length} tab=${tab} edges=${edges} scores=${scores} leak=${b.guard?.book_leakage}`);
+  card.notes.push(`Open data: ${ds.length} sources, TabFormer ${tab}, AML ${edges}, GraphSAGE ${scores}, DB ${f.db_size?.pretty}, RBI PSI ${psi?.row_count ?? 0}`);
+  return ok;
+}
+
+async function sectionAccuracy() {
+  // Deterministic planted numbers and GroundedNumbers policy — do not claim 99%.
+  const payoutId = "payouts:under_payout:PAY-MER002-2026-10";
+  const r = await api("/api/agents/investigate", {
+    method: "POST",
+    body: JSON.stringify({ exception_id: payoutId, domain: "payouts", mode: "deterministic" }),
+  });
+  const aud = r.body?.outputs?.auditor || {};
+  const inv = r.body?.outputs?.investigator || {};
+  const text = JSON.stringify(aud) + JSON.stringify(inv);
+  const hasAmt = /19,421\.10|19421\.10/.test(text);
+  const policyFail = Array.isArray(aud.checks) && aud.checks.some((c) => /policy|contract/i.test(String(c.id || c.name || c.check || "")) && /fail|n\/a|na/i.test(String(c.result || c.status)));
+  const sugg = (aud.suggestions || []).length >= 1;
+  const faith = Number(aud.faithfulness ?? inv.faithfulness ?? 0);
+  const ver = String(aud.verification || "");
+  const ok = r.ok && hasAmt && sugg && (ver === "grounded" || ver === "deterministic_replacement") && faith >= 1;
+  card.add("ask_your_data", { technical: ok ? "pass" : "fail" }); // already scored functionally in Ask section
+  card.notes.push(`Accuracy (deterministic payout): ok=${ok} verification=${ver} faithfulness=${faith} suggestions=${(aud.suggestions||[]).length} policy=${policyFail} amount=${hasAmt}. Template Ask is measured separately. No 99% claim.`);
+  if (!ok) card.remaining.push(`Accuracy payout investigate failed status=${r.status} ver=${ver} faith=${faith}`);
+  return ok;
+}
+
 async function main() {
   console.log("Regression against", BASE, "results →", RESULTS);
   const sql = db();
@@ -952,6 +1101,12 @@ async function main() {
   await sectionAuditorPayout();
   console.log("section: CFG-003 investigate path");
   await sectionInvestigateCfg003();
+  console.log("section: open data");
+  await sectionOpenData();
+  console.log("section: perf budgets");
+  await sectionPerf();
+  console.log("section: accuracy");
+  await sectionAccuracy();
   console.log("section: typecheck");
   await sectionTypecheck();
   console.log("section: playwright");

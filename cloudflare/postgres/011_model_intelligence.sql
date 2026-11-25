@@ -674,10 +674,8 @@ BEGIN
       SELECT COALESCE(SUM(leakage),0) FROM ra_area_summary
       WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
     )::numeric, 2),
-    exception_count = (
-      SELECT COALESCE(SUM(exception_count),0) FROM ra_area_summary
-      WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
-    )
+    exception_count = (SELECT COUNT(*) FROM ra_exception_rows
+      WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','files'))
   WHERE id = 1;
 
   INSERT INTO ra_ml_kpi (
