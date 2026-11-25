@@ -84,10 +84,31 @@ export default function ExecutivePage() {
 
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
+      <section
+        className="rounded-xl bg-navy-900 px-4 py-3 text-white sm:px-5"
+        data-testid="brand-hero"
+        aria-label="Kosha Kshema Revenue Assurance"
+      >
+        <h1 className="text-base font-semibold leading-snug tracking-tight sm:text-lg">
+          Agentic Revenue Assurance,{" "}
+          <span className="text-gold-200">powered by AI and advanced analytics</span>
+        </h1>
+        <ul className="mt-2 grid gap-1.5 text-[12px] leading-snug text-slate-200 sm:mt-2.5 sm:grid-cols-3 sm:gap-3 sm:text-[13px]">
+          <li className="border-l-2 border-gold-400 pl-2">
+            Autonomous agents reconcile every transaction, settlement and fee to detect revenue leakage early.
+          </li>
+          <li className="border-l-2 border-gold-400 pl-2">
+            They explain each exception with evidence and drive recovery through to closure with maker-checker approval.
+          </li>
+          <li className="border-l-2 border-gold-400 pl-2">
+            Every figure is computed from source data, never guessed.
+          </li>
+        </ul>
+      </section>
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-ink">Executive summary</h1>
+          <h2 className="text-lg font-semibold tracking-tight text-ink sm:text-xl">Executive summary</h2>
           <p className="text-sm text-muted">
             Complete revenue assurance · {data.period.label} book · as of {data.period.as_of}
           </p>
