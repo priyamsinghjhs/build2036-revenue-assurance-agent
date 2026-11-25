@@ -1,4 +1,6 @@
 /** Basic free-tier file parsers for MT940 and camt.053. */
+import type { Context } from "hono";
+import { requireUser } from "./auth";
 
 export function parseMt940(text: string): Array<Record<string, unknown>> {
   const rows: Array<Record<string, unknown>> = [];
@@ -17,10 +19,8 @@ export function parseMt940(text: string): Array<Record<string, unknown>> {
 }
 
 export function parseCamt053(xml: string): Array<Record<string, unknown>> {
-  // Minimal stub: extract amounts and refs via regex for free-tier demo
   const rows: Array<Record<string, unknown>> = [];
   const amountRe = /<Amt[^>]*>([0-9.]+)<\/Amt>/g;
-  const refRe = /<EndToEndId>([^<]+)<\/EndToEndId>/g;
   let m;
   while ((m = amountRe.exec(xml))) {
     rows.push({ type: "camt053", amount: Number(m[1]), raw: m[0] });
@@ -39,6 +39,3 @@ export async function handleIngestFile(c: Context) {
     : parseMt940(content);
   return c.json({ ok: true, format, row_count: rows.length, sample: rows.slice(0, 5), ingested_by: user.id });
 }
-
-import type { Context } from "hono";
-import { requireUser } from "./auth";
