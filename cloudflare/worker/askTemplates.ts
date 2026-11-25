@@ -263,28 +263,28 @@ LIMIT 50`,
       sql: `SELECT
   ROUND((
     COALESCE((
-      SELECT SUM(leakage) FROM ra_exception_rows
+      SELECT SUM(leakage) FROM v_ask_exceptions
       WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
     ), 0)
     + COALESCE((
-      SELECT SUM(s.leakage) FROM ra_area_summary s
+      SELECT SUM(s.leakage) FROM v_ask_areas s
       WHERE s.area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
-        AND NOT EXISTS (SELECT 1 FROM ra_exception_rows e WHERE e.area = s.area)
+        AND NOT EXISTS (SELECT 1 FROM v_ask_exceptions e WHERE e.area = s.area)
     ), 0)
   )::numeric, 2) AS total_leakage,
   (
     COALESCE((
-      SELECT COUNT(*) FROM ra_exception_rows
+      SELECT COUNT(*) FROM v_ask_exceptions
       WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
     ), 0)
     + COALESCE((
-      SELECT SUM(s.exception_count) FROM ra_area_summary s
+      SELECT SUM(s.exception_count) FROM v_ask_areas s
       WHERE s.area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
-        AND NOT EXISTS (SELECT 1 FROM ra_exception_rows e WHERE e.area = s.area)
+        AND NOT EXISTS (SELECT 1 FROM v_ask_exceptions e WHERE e.area = s.area)
     ), 0)
   )::int AS exception_count,
-  (SELECT match_rate FROM ra_kpi_summary WHERE id = 1) AS match_rate,
-  (SELECT merchant_count FROM ra_kpi_summary WHERE id = 1) AS merchant_count
+  (SELECT match_rate FROM v_ask_kpis) AS match_rate,
+  (SELECT merchant_count FROM v_ask_kpis) AS merchant_count
 `,
       narrative: (rows) => {
         const r = rows[0];
