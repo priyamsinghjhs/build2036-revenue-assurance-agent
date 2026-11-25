@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { Play, RefreshCw } from "lucide-react";
 import { api, type ExceptionRow, type SuggestionDecision } from "@/api";
 import { AuditPanel } from "@/components/AuditPanel";
@@ -189,7 +189,7 @@ export default function InvestigatePage() {
                     Step {i + 1} {active ? "· running" : failed ? "· failed" : done ? "· done" : ""}
                   </div>
                   <div className="mt-1 font-semibold capitalize">{id}</div>
-                  {out && <VisualOutput id={id} output={out} exceptionId={row.exception_id} />}
+                  {out && <VisualOutput id={id} output={out} />}
                   {failed && (
                     <div className="mt-2 space-y-2">
                       <p className="text-xs text-danger">This step did not finish. Retry to continue from here.</p>
@@ -228,7 +228,7 @@ export default function InvestigatePage() {
   );
 }
 
-function VisualOutput({ id, output, exceptionId }: { id: string; output: Record<string, unknown>; exceptionId?: string }) {
+function VisualOutput({ id, output }: { id: string; output: Record<string, unknown> }) {
   const conf = output.confidence != null && output.confidence !== "" ? normalizeConfidence(output.confidence) : null;
   return (
     <div className="mt-3 space-y-2 text-xs text-slate-600">
