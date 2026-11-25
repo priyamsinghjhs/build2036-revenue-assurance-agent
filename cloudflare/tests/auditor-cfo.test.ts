@@ -31,17 +31,17 @@ function signOffOk(out: { verdict?: unknown; cfo_one_liner?: unknown }, label: s
 check(
   "cfoLineForVerdict needs_review",
   cfoLineForVerdict("needs_review", "CFG-003 / MER006", 2028.36) ===
-    "Auditor needs review on CFG-003 / MER006, leakage 2028.36.",
+    "Auditor needs review on CFG-003 / MER006, leakage ₹2,028.36.",
 );
 
 check(
   "cfoLineForVerdict rejected",
-  cfoLineForVerdict("rejected", "CFG-003", 2028.36) === "Auditor rejected CFG-003, leakage 2028.36.",
+  cfoLineForVerdict("rejected", "CFG-003", 2028.36) === "Auditor rejected CFG-003, leakage ₹2,028.36.",
 );
 
 check(
   "cfoLineForVerdict approved",
-  cfoLineForVerdict("approved", "CFG-003", 2028.36) === "Auditor is ready to sign off CFG-003, leakage 2028.36.",
+  cfoLineForVerdict("approved", "CFG-003", 2028.36) === "Auditor is ready to sign off CFG-003, leakage ₹2,028.36.",
 );
 
 const rewritten = alignCfoToVerdict({
@@ -58,7 +58,7 @@ const rewritten = alignCfoToVerdict({
 } as AuditorOutput);
 check(
   "alignCfoToVerdict rewrites ready-to-sign-off when needs_review",
-  rewritten.cfo_one_liner === "Auditor needs review on CFG-003 / MER006, leakage 2028.36.",
+  rewritten.cfo_one_liner === "Auditor needs review on CFG-003 / MER006, leakage ₹2,028.36.",
   rewritten.cfo_one_liner,
 );
 signOffOk(rewritten, "aligned needs_review line has no sign-off phrasing");
@@ -71,7 +71,7 @@ const rejected = alignCfoToVerdict({
 });
 check(
   "alignCfoToVerdict rewrites ready-to-sign-off when rejected",
-  rejected.cfo_one_liner === "Auditor rejected CFG-003 / MER006, leakage 2028.36.",
+  rejected.cfo_one_liner === "Auditor rejected CFG-003 / MER006, leakage ₹2,028.36.",
   rejected.cfo_one_liner,
 );
 signOffOk(rejected, "aligned rejected line has no sign-off phrasing");

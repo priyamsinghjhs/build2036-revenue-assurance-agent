@@ -176,9 +176,9 @@ export function alignCfoToVerdict(out: AuditorOutput): AuditorOutput {
   const cfo = String(out.cfo_one_liner ?? "");
   if (verdict === "approved") return out;
   if (/ready to sign off/i.test(cfo)) {
-    const m = cfo.match(/ready to sign off\s+(.+?)(?:,\s*leakage\s+([^.,]+))?\s*\.?$/i);
+    const m = cfo.match(/ready to sign off\s+(.+?)(?:,\s*leakage\s+(\S+))?\s*\.?$/i);
     const who = (m?.[1] ?? "this exception").trim().replace(/[.,]$/, "");
-    const leakRaw = m?.[2] != null ? Number(String(m[2]).replace(/,/g, "")) : NaN;
+    const leakRaw = m?.[2] != null ? Number(String(m[2]).replace(/[₹,\s]/g, "").replace(/[.,]$/, "")) : NaN;
     out.cfo_one_liner = cfoLineForVerdict(verdict, who, Number.isFinite(leakRaw) ? leakRaw : null);
   }
   return out;
