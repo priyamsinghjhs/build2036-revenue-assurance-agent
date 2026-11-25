@@ -1,3 +1,5 @@
+import { areaFromPath, areaInRoleScope } from "./scope";
+
 /** App-level RBAC. Shared by the Worker and the UI. */
 
 export const ROLES = ["admin", "cfo", "treasury", "recon_ops", "auditor", "viewer"] as const;
@@ -153,5 +155,7 @@ export function navVisible(role: Role, href: string): boolean {
   if (href === "/settings/users") return hasPermission(role, "users");
   if (href.startsWith("/settings")) return hasPermission(role, "settings");
   if (href === "/ingestion") return hasPermission(role, "settings") || hasPermission(role, "recon_run");
+  const area = areaFromPath(href);
+  if (area && !areaInRoleScope(role, area)) return false;
   return true;
 }

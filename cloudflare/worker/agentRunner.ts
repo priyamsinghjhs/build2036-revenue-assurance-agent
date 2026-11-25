@@ -435,7 +435,7 @@ export async function runAgentStep(
         grounding.claims,
         grounding.supported,
         retries,
-        String(output.verification ?? (passed ? "grounded" : "unverified")),
+        String(output.verification ?? (passed ? (String(output.source || "") === "deterministic" ? "deterministic_replacement" : "grounded") : "grounding_failed")),
         JSON.stringify(grounding.unsupported),
         created,
       )
@@ -459,9 +459,9 @@ export async function runAgentStep(
             JSON.stringify(finalizeAuditorOutput({
               verdict: "needs_review",
               signoff: "needs_review",
-              compliance_notes: `Upstream ${opts.agentId} output marked unverified after grounding rework. Unsupported: ${(output.unsupported_claims as string[]).join(", ")}. Do not treat as fact.`,
+              compliance_notes: `Upstream ${opts.agentId} output failed the deterministic grounding check. Unsupported: ${(output.unsupported_claims as string[]).join(", ")}. Do not treat as fact.`,
               cfo_one_liner: "An agent output could not be grounded in the SQL facts and needs human review.",
-              verification: "unverified",
+              verification: "grounding_failed",
               faithfulness: output.faithfulness,
             }, input, briefPriors)),
             created,

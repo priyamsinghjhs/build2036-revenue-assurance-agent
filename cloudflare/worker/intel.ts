@@ -384,7 +384,11 @@ export async function runRoutingSim(db: AppDb) {
 
 export async function listCases(db: AppDb) {
   const { results } = await db
-    .prepare("SELECT * FROM ra_cases ORDER BY CASE status WHEN 'investigating' THEN 0 WHEN 'awaiting_approval' THEN 1 WHEN 'new' THEN 2 ELSE 3 END, leakage DESC")
+    .prepare(
+      `SELECT c.*, (SELECT e.exception_id FROM ra_case_exceptions e WHERE e.case_id=c.case_id LIMIT 1) AS exception_id
+       FROM ra_cases c
+       ORDER BY CASE c.status WHEN 'investigating' THEN 0 WHEN 'awaiting_approval' THEN 1 WHEN 'new' THEN 2 ELSE 3 END, c.leakage DESC`,
+    )
     .all<Record<string, unknown>>();
   return { cases: results ?? [] };
 }

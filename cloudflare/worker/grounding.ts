@@ -27,6 +27,7 @@ const STOP_IDS = new Set([
   "GOOD", "POOR", "YES", "NO", "THE", "AND", "FOR", "FROM", "WITH", "CASE", "WHEN",
   "THEN", "ELSE", "END", "CAST", "TRUE", "FALSE", "NULL", "UPI", "CARD", "NEFT",
   "P2M", "P2P", "PPI", "GST", "TDS", "MDR", "SLA", "CFO", "RAG", "LLM", "API",
+  "TREAT", "TREATS", "TREATMENT", "DRAFT",
 ]);
 
 function tokenizeContext(context: string): { text: string; numbers: number[] } {
@@ -92,7 +93,7 @@ function extractClaims(output: unknown): GroundingClaim[] {
   const dateRe = /\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})\b/gi;
   while ((m = dateRe.exec(text))) add("date", m[0]);
 
-  const idRe = /\b(?:MER|CAP|ACQ|PAR|DOC|RULE|CTL|ANOM|CAN|TXN|UPI|INV|E2E|IPM|VISA|CAMT|ING|DRAFT|RSK|APM|TR)[A-Z0-9:_-]{2,}\b|\b[A-Z]{2,5}\d{3,}\b|\b[a-z]+(?::[a-z0-9_]+){2,}\b/gi;
+  const idRe = /\b(?:MER|CAP|ACQ|PAR|DOC|RULE|CTL|ANOM|CAN|TXN|UPI|INV|E2E|IPM|VISA|CAMT|ING|RSK|APM|TRS|TRX)[A-Z0-9:_-]{2,}\b|\b[A-Z]{2,5}\d{3,}\b|\b[a-z]+(?::[a-z0-9_]+){2,}\b/gi;
   while ((m = idRe.exec(text))) {
     const v = m[0];
     if (STOP_IDS.has(v.toUpperCase())) continue;

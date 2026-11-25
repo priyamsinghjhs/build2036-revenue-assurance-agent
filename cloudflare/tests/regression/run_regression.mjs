@@ -86,6 +86,33 @@ async function sectionAuth() {
   card.notes.push(`Auth: unauth executive=${unauth.status}; login user=${session.user?.id || "ok"}; weather ask refused=${oos} status=${weather.body?.status}`);
   if (!exec.ok) throw new Error("Authenticated /api/executive failed");
   if (!oos) card.remaining.push("Ask did not refuse the out-of-scope weather question");
+
+  const payoutId = "payouts:under_payout:PAY-MER002-2026-10";
+  const authId = "authorization:auth_capture_mismatch:AUTH00036";
+  const amlAssigned = "aml:aml_velocity_spike:velocity_spike-MER006";
+  const amlOther = "aml:aml_round_trip:round_trip-MER007";
+  const enc = (id) => "/api/exceptions/" + encodeURIComponent(id);
+  await login("viewer@ra.local");
+  const vPay = await api(enc(payoutId));
+  const vAuth = await api(enc(authId));
+  const vArea = await api("/api/areas/payouts");
+  await login("recon_ops@ra.local");
+  const rAssigned = await api(enc(amlAssigned));
+  const rOther = await api(enc(amlOther));
+  await login();
+  const aPay = await api(enc(payoutId));
+  const idor = {
+    viewer_payout: vPay.status,
+    viewer_auth: vAuth.status,
+    viewer_payouts_area: vArea.status,
+    recon_assigned_aml: rAssigned.status,
+    recon_other_aml: rOther.status,
+    admin_payout: aPay.status,
+  };
+  const idorOk = vPay.status === 404 && vAuth.status === 200 && vArea.status === 404
+    && rAssigned.status === 200 && rOther.status === 404 && aPay.status === 200;
+  card.notes.push(`IDOR: ${JSON.stringify(idor)} ${idorOk ? "ok" : "FAIL"}`);
+  if (!idorOk) card.remaining.push(`Record-level IDOR checks failed: ${JSON.stringify(idor)}`);
 }
 
 async function sectionLiveApi() {
@@ -241,8 +268,12 @@ async function sectionKpiReconcile(sql) {
   if (live.ok && nearly(liveLeak, 856670.08, 0.05) && liveCount && liveCount < 217) {
     card.remaining.push(`Live Worker KPI exception_count is ${liveCount} while a refreshed book area_summary sums to 217. Leakage already matches ₹856670.08. The next 7:45 AM IST cron (after the hung-run fix that now calls refresh_ra_summaries) should align the count.`);
   }
+  // Book count is COUNT of ra_exception_rows excluding exposure areas, not SUM(area_summary).
+  // area_summary includes hop/sub-area slices (gateway, network, hops, clearing, etc.) that overlap the same book rows
+  // (prod book 243 vs book-area sum 264). The test asserts COUNT and leakage, and only records the sum as context.
+  card.notes.push(`Book count definition: KPI ${kpi.exception_count} equals COUNT of book exception rows ${bookCount}. area_summary sum ${sumN} may be higher because hop/sub-area slices overlap; it is not the book figure.`);
   const pass = leakOk && liveOk && countOk && narrativeOk;
-  card.add("gap_detection", { functional: pass ? "pass" : "fail", technical: live.ok ? "pass" : "fail", detail: `branch book area_summary ₹${sumLeak.toFixed(2)} vs branch KPI ₹${Number(kpi.total_leakage).toFixed(2)}; count KPI ${kpi.exception_count} vs book rows ${bookCount} (area_summary sum ${sumN}); live (prod) ₹${liveLeak} exceptions=${liveCount} narrative_ok=${narrativeOk}; top_drivers book-only=${!topHasExposure}; compliance_exposure chart=${Array.isArray(live.body?.compliance_exposure)}` });
+  card.add("gap_detection", { functional: pass ? "pass" : "fail", technical: live.ok && countOk ? "pass" : "fail", detail: `book COUNT is the source of truth: branch KPI ${kpi.exception_count} vs book rows ${bookCount} (area_summary sum ${sumN} overlaps, not a fail); leakage branch ₹${sumLeak.toFixed(2)} vs KPI ₹${Number(kpi.total_leakage).toFixed(2)}; live (prod) ₹${liveLeak} exceptions=${liveCount} narrative_ok=${narrativeOk}; top_drivers book-only=${!topHasExposure}; compliance_exposure chart=${Array.isArray(live.body?.compliance_exposure)}` });
   return { kpi, sumLeak, sumN, leakOk, countOk, liveTop, topHasExposure };
 }
 
@@ -882,8 +913,7 @@ if (report.overlap_hits || errors.length || report.chart_mismatches.length) proc
   card.notes.push(`Playwright: ${summary || res.stderr.slice(0, 300)} (exit ${res.status})`);
   const techPass = res.status === 0;
   if (!techPass) card.remaining.push(`Playwright failed: ${summary || res.stderr.slice(0, 200)}`);
-  // attach a technical result to frontend-facing agents
-  card.add("gap_detection", { technical: techPass ? "pass" : "fail" });
+  // Do not overwrite gap_detection (book-count) with a Playwright result.
   return { ok: techPass, summary };
 }
 
@@ -1038,10 +1068,11 @@ async function sectionTypecheck() {
   const numbers = spawnSync("npx", ["tsx", "scripts/test-numbers.ts"], { cwd: ROOT, encoding: "utf8" });
   const auth = spawnSync("npx", ["tsx", "scripts/test-auth.ts"], { cwd: ROOT, encoding: "utf8" });
   const grounding = spawnSync("npx", ["tsx", "scripts/test-grounding.ts"], { cwd: ROOT, encoding: "utf8" });
-  const ok = tscW.status === 0 && tscA.status === 0 && cfo.status === 0 && numbers.status === 0 && grounding.status === 0;
-  card.notes.push(`Typecheck worker ${tscW.status === 0 ? "ok" : "FAIL"} frontend ${tscA.status === 0 ? "ok" : "FAIL"}; auditor CFO ${cfo.status === 0 ? "ok" : "FAIL"}; numbers ${numbers.status === 0 ? "ok" : "FAIL"}; grounding ${grounding.status === 0 ? "ok" : "FAIL"}`);
+  const scope = spawnSync("npx", ["tsx", "scripts/test-scope.ts"], { cwd: ROOT, encoding: "utf8" });
+  const ok = tscW.status === 0 && tscA.status === 0 && cfo.status === 0 && numbers.status === 0 && grounding.status === 0 && scope.status === 0;
+  card.notes.push(`Typecheck worker ${tscW.status === 0 ? "ok" : "FAIL"} frontend ${tscA.status === 0 ? "ok" : "FAIL"}; auditor CFO ${cfo.status === 0 ? "ok" : "FAIL"}; numbers ${numbers.status === 0 ? "ok" : "FAIL"}; grounding ${grounding.status === 0 ? "ok" : "FAIL"}; scope ${scope.status === 0 ? "ok" : "FAIL"}`);
   if (!ok) {
-    card.remaining.push(`Typecheck/unit tests failed:\n${(tscW.stdout + tscW.stderr + tscA.stdout + tscA.stderr + cfo.stdout + cfo.stderr + numbers.stdout + numbers.stderr + grounding.stdout + grounding.stderr).slice(0, 1200)}`);
+    card.remaining.push(`Typecheck/unit tests failed:\n${(tscW.stdout + tscW.stderr + tscA.stdout + tscA.stderr + cfo.stdout + cfo.stderr + numbers.stdout + numbers.stderr + grounding.stdout + grounding.stderr + scope.stdout + scope.stderr).slice(0, 1200)}`);
   }
   return ok;
 }
