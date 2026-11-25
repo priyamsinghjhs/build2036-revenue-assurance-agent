@@ -126,6 +126,8 @@ const META_KEYS = new Set([
   "cache_hit", "retries", "source", "verification", "faithfulness",
   "unsupported", "claims", "supported", "error", "model",
   "prompt_tokens", "completion_tokens", "eval_id",
+  // Echoes of an earlier check's rejected claims are a log, not new claims.
+  "unsupported_claims", "post_check_removed", "hypothesis_claims", "hypothesis_faithfulness",
 ]);
 
 /** Advice / hypothesis sentences that start with these tags are not scored as facts. */
