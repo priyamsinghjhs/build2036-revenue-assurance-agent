@@ -311,7 +311,7 @@ export async function runAgentStep(
   let grounding = checkGrounding({}, user);
   let retries = 0;
   let prompt = basePrompt;
-  const started = Date.now();
+  const started = neonStarted;
   const deadline = started + STEP_BUDGET_MS;
   let ai_ms = 0;
   if (opts.mode === "deterministic") {
