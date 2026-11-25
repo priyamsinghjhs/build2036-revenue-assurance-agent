@@ -18,6 +18,18 @@
   "triggers": {
     "crons": ["15 2 * * *"]
   },
+  "vars": {
+    "LLM_PROVIDER": "cloudflare",
+    "CLOUDFLARE_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "CF_ACCOUNT_ID": "95f96d50618b771a8c58542029828a1a"
+  },
+  "previews": {
+    "vars": {
+      "LLM_PROVIDER": "cloudflare",
+      "CLOUDFLARE_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
+      "CF_ACCOUNT_ID": "95f96d50618b771a8c58542029828a1a"
+    }
+  }
   // Runtime database is Neon Postgres via secret DATABASE_URL
   // (npx wrangler secret put DATABASE_URL). Do not add a D1 binding.
   // Credential envelope: npx wrangler secret put DATA_SOURCES_KEK (32-byte key, base64). Never commit it.
@@ -26,4 +38,3 @@
   // "hyperdrive": [{ "binding": "HYPERDRIVE_MYSQL", "id": "<id>" }] and redeploy.
   // This repo does not create Hyperdrive configs or Cloudflare Tunnels automatically.
 }
-
