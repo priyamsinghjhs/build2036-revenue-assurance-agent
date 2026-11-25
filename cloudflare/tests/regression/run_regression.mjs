@@ -702,6 +702,43 @@ for (const w of WIDTHS) {
       });
       if (!spark.ok) errors.push({ w, type: "anomaly-spark", msg: (spark.issues || []).join("; ") || "sparkline cards missing figures", url: path, n: spark.n });
     }
+    if (path === "/ask" && w === 1440) {
+      const chip = page.locator('[data-testid="ask-chips"] button').filter({ hasText: /total book leakage/i }).first();
+      if (await chip.count()) await chip.click();
+      else {
+        await page.getByTestId("ask-input").fill("What is the total book leakage");
+        await page.getByTestId("ask-submit").click();
+      }
+      await page.getByTestId("ask-answer").waitFor({ timeout: 15000 }).catch(() => {});
+      const ask = await page.evaluate(() => {
+        const answer = document.querySelector('[data-testid="ask-answer"]');
+        const table = document.querySelector('[data-testid="ask-table"]');
+        const sql = document.querySelector('[data-testid="ask-sql"]');
+        const text = `${answer?.textContent || ""} ${table?.textContent || ""}`;
+        return { ok: Boolean(answer && table && /₹/.test(text) && /v_ask_/i.test(sql?.textContent || "")), text: text.slice(0, 240) };
+      });
+      if (!ask.ok) errors.push({ w, type: "ask", msg: "Ask page missing answer, table, rupee figures or SQL", url: path, detail: ask.text });
+      await page.screenshot({ path: "/workspace/verify/fix-ask.png", fullPage: true });
+    }
+    if (w === 1440 && path === "/investigate") {
+      const payout = "/investigate/" + encodeURIComponent("payouts:under_payout:PAY-MER002-2026-10");
+      await page.goto(BASE + payout, { waitUntil: "networkidle", timeout: 45000 }).catch((e) => errors.push({ w, type: "nav", msg: String(e), url: payout }));
+      await page.waitForTimeout(500);
+      await page.getByTestId("auditor-panel").waitFor({ timeout: 10000 }).catch(() => {});
+      const audit = await page.evaluate(() => {
+        const panel = document.querySelector('[data-testid="auditor-panel"]');
+        const verdicts = document.querySelectorAll('[data-testid="auditor-verdict"]');
+        const suggestions = panel ? panel.querySelectorAll('[data-testid="auditor-suggestions"] .rounded-xl') : [];
+        const text = panel ? (panel.innerText || "") : (document.body.innerText || "");
+        const bad = /graph_tools|under_payout|\\bra_[a-z0-9_]+\\b|\\bv_ask_[a-z0-9_]+\\b|paths, rings, proximity/i.test(text);
+        return { hasPanel: !!panel, verdicts: verdicts.length, sugCount: suggestions.length, bad, text: text.slice(0, 400) };
+      });
+      if (!audit.hasPanel) errors.push({ w, type: "auditor-panel", msg: "Auditor panel missing on payout investigation", url: payout });
+      if (audit.verdicts > 1) errors.push({ w, type: "auditor-panel", msg: "Duplicated verdict text (" + audit.verdicts + ")", url: payout });
+      if (audit.sugCount < 1) errors.push({ w, type: "auditor-panel", msg: "Suggestions count < 1", url: payout });
+      if (audit.bad) errors.push({ w, type: "auditor-panel", msg: "snake_case or internal tool names visible", url: payout, detail: audit.text });
+      await page.screenshot({ path: "/workspace/verify/fix-auditor-panel.png", fullPage: true });
+    }
     if (path==="/" && w===1440) {
       await page.getByText("Top leakage drivers").first().scrollIntoViewIfNeeded().catch(()=>{});
       await page.screenshot({ path: OUT+"/v8-regression-executive.png", fullPage: true });
@@ -736,6 +773,77 @@ if (report.overlap_hits || errors.length || report.chart_mismatches.length) proc
   return { ok: techPass, summary };
 }
 
+
+
+async function sectionAskTemplates() {
+  const cases = [
+    { q: "top 5 merchants by leakage", check: (b) => b.source === "template" && b.rows?.[0]?.merchant_id === "MER002" && Number(b.rows[0].leakage) > 190000 && Number(b.rows[0].leakage) < 200000 },
+    { q: "total scheme leakage in October", check: (b) => b.source === "template" && Math.abs(Number(b.rows?.[0]?.leakage) - 47962.5) < 0.05 },
+    { q: "which acquirer has the lowest success rate", check: (b) => b.source === "template" && b.rows?.[0]?.acquirer_id === "ACQ-ICICI" },
+    { q: "show unmatched bank transactions above ₹10,000", check: (b) => b.source === "template" && b.rows?.some((r) => r.ref_id === "TRS01523") && Number(b.rows.find((r) => r.ref_id === "TRS01523")?.leakage) > 17500 },
+    { q: "FX markup by currency", check: (b) => b.source === "template" && b.rows?.some((r) => r.from_ccy === "USD" && r.to_ccy === "INR") },
+    { q: "Which domains have the most leakage?", check: (b) => b.source === "template" && b.rows?.[0]?.area === "funding" && Number(b.rows[0].leakage) > 300000 },
+    { q: "Show unapplied contract rebate exceptions", check: (b) => b.source === "template" && b.rows?.some((r) => r.category === "contract_unapplied_rebate") },
+    { q: "List open cases with leakage over 10000", check: (b) => b.source === "template" && b.rows?.length > 0 && b.rows.every((r) => Number(r.leakage) > 10000 && !/resolved|closed/i.test(String(r.status))) },
+    { q: "what is the total book leakage", check: (b) => b.source === "template" && Math.abs(Number(b.rows?.[0]?.total_leakage) - 994298.01) < 0.05 },
+    { q: "approval rate by scheme", check: (b) => b.source === "template" && b.rows?.some((r) => r.scheme === "NETBANKING") },
+  ];
+  const results = [];
+  for (const c of cases) {
+    const r = await api("/api/ask", { method: "POST", body: JSON.stringify({ question: c.q }) });
+    const b = r.body || {};
+    const ok = r.ok && b.status === "ok" && Array.isArray(b.rows) && c.check(b) && /₹/.test(String(b.answer || ""));
+    results.push({ q: c.q, ok, ms: r.ms, status: b.status, source: b.source, error: b.error, n: b.rows?.length ?? 0, answer: String(b.answer || "").slice(0, 180) });
+  }
+  const times = results.map((x) => x.ms).sort((a, b) => a - b);
+  const p95 = times[Math.min(times.length - 1, Math.ceil(times.length * 0.95) - 1)];
+  const passN = results.filter((x) => x.ok).length;
+  const budget = p95 < 3000;
+  writeFileSync(`${RESULTS}/ask-templates.json`, JSON.stringify({ p95, passN, results }, null, 2));
+  const pass = passN === cases.length && budget;
+  card.add("ask_your_data", { functional: passN === cases.length ? "pass" : "fail", technical: budget ? "pass" : "fail", detail: `templates ${passN}/${cases.length} correct; p95 ${p95}ms (budget 3000)` });
+  if (!pass) card.remaining.push(`Ask templates ${passN}/${cases.length}, p95 ${p95}ms`);
+  return { passN, p95, results };
+}
+
+async function sectionAuditorPayout() {
+  const eid = "payouts:under_payout:PAY-MER002-2026-10";
+  const ex = await api(`/api/exceptions/${encodeURIComponent(eid)}`);
+  const row = ex.body?.exception || ex.body;
+  const leak = Number(row?.leakage);
+  const started = await api("/api/agents/runs", { method: "POST", body: JSON.stringify({ scope: `exception:${eid}`, domain: "payouts" }) });
+  if (!started.ok || !started.body?.run_id) {
+    card.add("auditor", { functional: "fail", detail: `payout run failed ${started.status}` });
+    return;
+  }
+  const runId = started.body.run_id;
+  let aud;
+  for (const agent of ["investigator", "action", "auditor"]) {
+    const r = await api("/api/agents/step", {
+      method: "POST",
+      body: JSON.stringify({ run_id: runId, agent_id: agent, scope: `exception:${eid}`, domain: "payouts", exception_id: eid, mode: "deterministic" }),
+    });
+    if (agent === "auditor") aud = r;
+  }
+  await api("/api/agents/complete", { method: "POST", body: JSON.stringify({ run_id: runId }) });
+  const out = aud?.body?.output || {};
+  const policy = (out.checks || []).find((c) => c.name === "policy_compliance");
+  const suggestions = out.suggestions || [];
+  const blob = JSON.stringify(out);
+  const inv = (await api(`/api/agents/latest?scope=${encodeURIComponent("exception:" + eid)}`)).body;
+  const invOut = (inv?.latest?.outputs || []).find((o) => o.agent_id === "investigator")?.output || {};
+  const root = String(invOut.root_cause || "") + " " + String(invOut.hypothesis || "");
+  const hypothesisOk = /hypothesis/i.test(root) || !/incorrect reserves calculation/i.test(root);
+  const sugOk = suggestions.length >= 1 && suggestions.some((s) => /payout run|reserve calculation|next payout/i.test(String(s.title || "") + String(s.rationale || "")));
+  const moneyOk = /₹/.test(JSON.stringify(suggestions) + String(out.cfo_one_liner || "")) && !/19421\.1 INR/.test(blob);
+  const policyOk = policy && policy.result !== "pass";
+  const clean = !/graph_tools|paths, rings, proximity/i.test(blob);
+  const ok = aud?.ok && sugOk && moneyOk && policyOk && clean && hypothesisOk && Math.abs(leak - 19421.1) < 0.05;
+  card.notes.push(`Payout auditor suggestions=${suggestions.length} policy=${policy?.result} cfo=${out.cfo_one_liner}`);
+  if (!ok) card.remaining.push("Payout auditor panel checks failed (suggestions, policy, rupee format, or hypothesis label)");
+  writeFileSync(`${RESULTS}/auditor-payout.json`, JSON.stringify({ leak, policy, suggestions, cfo: out.cfo_one_liner, root, hypothesisOk }, null, 2));
+  return ok;
+}
 
 async function sectionInvestigateCfg003() {
   const eid = "config:config_unapproved:CFG-003";
@@ -838,6 +946,10 @@ async function main() {
   await sectionGates();
   console.log("section: autonomy / scheduled");
   await sectionAutonomy(sql);
+  console.log("section: Ask templates");
+  await sectionAskTemplates();
+  console.log("section: payout auditor");
+  await sectionAuditorPayout();
   console.log("section: CFG-003 investigate path");
   await sectionInvestigateCfg003();
   console.log("section: typecheck");

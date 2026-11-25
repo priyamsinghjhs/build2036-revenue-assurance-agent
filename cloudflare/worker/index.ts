@@ -42,6 +42,7 @@ import {
 } from "./intel";
 import { listIngestion, persistIngestion } from "./ingest";
 import { getModel, modelDetail, modelsOverview, predictFeatures } from "./ml/registry";
+import { ASK_VIEWS, SUGGESTED_QUESTIONS } from "./askTemplates";
 import { decideAuditorSuggestion, listSuggestionDecisions, type AuditSuggestion } from "./auditor";
 import { publicErrorMessage } from "../shared/errors";
 
@@ -441,7 +442,7 @@ app.post("/api/reviews/:id/decision", async (c) => {
     reviewer: body.reviewer ? String(body.reviewer) : undefined,
   }));
 });
-app.get("/api/ask/schema", (c) => c.json({ views: ["v_ask_kpis","v_ask_areas","v_ask_exceptions","v_ask_controls","v_ask_anomalies","v_ask_contracts","v_ask_cases","v_ask_files","v_ask_routing","v_ask_risks","v_ask_clearing"] }));
+app.get("/api/ask/schema", (c) => c.json({ views: [...ASK_VIEWS], suggested: SUGGESTED_QUESTIONS }));
 app.post("/api/ask", async (c) => {
   const body = await readJson(c);
   const q = String(body.question || "").trim();

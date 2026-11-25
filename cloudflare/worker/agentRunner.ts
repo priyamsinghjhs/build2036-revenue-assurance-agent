@@ -15,6 +15,7 @@ import {
 import type { Env } from "./types";
 import { getDb, type AppDb } from "./pg";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
+import { inrExact } from "../shared/money";
 import { checkGrounding, retryPrompt } from "./grounding";
 import { AUDITOR_SCHEMA, alignCfoToVerdict, finalizeAuditorOutput } from "./auditor";
 
@@ -127,7 +128,7 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
     const ex = await getException(db, exceptionId);
     const { graphTools } = await import("./intel");
     const graph = await graphTools(db, { merchant_id: ex?.merchant_id ?? undefined, exception_id: exceptionId }).catch(() => null);
-    return { task: "Investigate this single exception. Use the attached graph_tools results (paths, refund/chargeback rings, proximity) as evidence; do not invent graph edges.", exception: ex, graph_tools: graph, policy: await policyText(db, ex?.area ?? "synthetic") };
+    return { task: "Investigate this single exception. Use the attached merchant-to-acquirer path, refund or chargeback rings, and closeness to known-bad entities as evidence. Do not invent links. Write for a human reviewer: no internal tool names or snake_case field names. If a cause is not proven by the facts, label it a hypothesis.", exception: ex, network_links: graph, policy: await policyText(db, ex?.area ?? "synthetic") };
   }
   const top = await listExceptions(db, domain, 8);
   return {
@@ -226,26 +227,45 @@ function deterministicStepOutput(
     return out as unknown as Record<string, unknown>;
   }
   if (agentId === "action") {
+    const amt = leakage == null || leakage === "" ? null : Number(leakage);
     return {
       actions: [
         {
           type: "escalate",
           action: "escalate",
-          amount: leakage ?? null,
+          amount: amt,
           currency: String(facts.currency ?? "INR"),
           confidence: 40,
-          rationale: `Deterministic proposal for ${ref}: the action agent could not finish (${reason}). Escalate for human review.`,
+          rationale: `Deterministic proposal for ${ref}: the action agent could not finish (${reason}). Escalate for human review${amt != null && Number.isFinite(amt) ? " of " + inrExact(amt) : ""}.`,
         },
       ],
       source: "deterministic",
     };
   }
+  const expected = facts.expected_amount != null ? Number(facts.expected_amount) : null;
+  const actual = facts.actual_amount != null ? Number(facts.actual_amount) : null;
+  const leakN = leakage == null || leakage === "" ? null : Number(leakage);
+  const category = String(facts.category ?? "").replace(/_/g, " ");
+  const parts: string[] = [];
+  if (expected != null && Number.isFinite(expected) && actual != null && Number.isFinite(actual)) {
+    parts.push(`Expected ${inrExact(expected)} versus actual ${inrExact(actual)}${leakN != null && Number.isFinite(leakN) ? `, difference ${inrExact(leakN)}` : ""}.`);
+  } else if (leakN != null && Number.isFinite(leakN)) {
+    parts.push(`Booked difference ${inrExact(leakN)}.`);
+  }
+  const root = parts.length
+    ? `${category || "Exception"} on ${ref}${facts.merchant_id ? " at " + facts.merchant_id : ""} in ${String(area).replace(/_/g, " ")}. ${parts.join(" ")}`
+    : `Deterministic summary for ${ref} in ${String(area).replace(/_/g, " ")}: review the ledger facts before acting.`;
+  const hypothesis = /under.?payout|reserve/i.test(String(facts.category ?? "") + String(area))
+    ? "Hypothesis: the shortfall may come from an incorrect reserves calculation. That cause is not confirmed in the exception facts."
+    : undefined;
   return {
-    root_cause: `Deterministic summary for ${ref} in ${area}: the investigator could not finish (${reason}). Review the SQL facts before acting.`,
-    evidence: [ref, area].filter(Boolean),
-    affected: [ref],
-    confidence: 40,
+    root_cause: root,
+    hypothesis,
+    evidence: [ref, facts.merchant_id, expected != null ? `expected ${inrExact(expected)}` : "", actual != null ? `actual ${inrExact(actual)}` : "", leakN != null && Number.isFinite(leakN) ? `difference ${inrExact(leakN)}` : ""].filter(Boolean),
+    affected: [ref, facts.merchant_id].filter(Boolean),
+    confidence: parts.length ? 80 : 40,
     source: "deterministic",
+    note: reason && reason !== "requested" ? `Fallback used because ${reason}.` : undefined,
   };
 }
 
@@ -519,15 +539,32 @@ export async function listActions(db: AppDb, limit = 50) {
   return enriched.slice(0, limit);
 }
 
+function plainUserText(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  let s = value
+    .replace(/graph_tools[^.,;]*/gi, "the merchant-to-acquirer path and related risk links")
+    .replace(/\b(paths, rings, proximity)\b/gi, "related risk links")
+    .replace(/\bra_[a-z0-9_]+\b/gi, "the ledger")
+    .replace(/\bv_ask_[a-z0-9_]+\b/gi, "the summary view");
+  const rootLike = /incorrect reserves calculation/i.test(s) && !/hypothesis/i.test(s);
+  if (rootLike) s = `Hypothesis: ${s.trim()}`;
+  return s;
+}
+
 function sanitizeAgentOutput(output: Record<string, unknown>): Record<string, unknown> {
   const next = { ...output };
   if (next.confidence !== undefined) next.confidence = normalizeConfidence(next.confidence);
+  for (const key of ["root_cause", "summary", "rationale", "hypothesis", "cfo_one_liner", "note"]) {
+    if (typeof next[key] === "string") next[key] = plainUserText(next[key]);
+  }
+  if (Array.isArray(next.evidence)) next.evidence = (next.evidence as unknown[]).map((e) => plainUserText(e));
   const actionRows = Array.isArray(next.actions) ? (next.actions as Record<string, unknown>[]) : null;
   if (actionRows) {
     next.actions = actionRows.map((act) => ({
       ...act,
       amount: act.amount !== undefined ? normalizeAmount(act.amount) : act.amount,
       confidence: act.confidence !== undefined ? normalizeConfidence(act.confidence) : act.confidence,
+      rationale: plainUserText(act.rationale),
     }));
   }
   for (const key of ["top_gaps", "priority_gaps"] as const) {

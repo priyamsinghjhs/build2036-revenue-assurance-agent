@@ -601,6 +601,11 @@ export type AskResult = {
   status: string;
   error?: string;
   rows: Record<string, unknown>[];
+  answer?: string;
+  source?: string;
+  template_id?: string | null;
+  cached?: boolean;
+  timing_ms?: number;
 };
 
 

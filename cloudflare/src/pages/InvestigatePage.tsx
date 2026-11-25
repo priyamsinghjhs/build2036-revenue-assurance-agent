@@ -6,6 +6,7 @@ import { AuditPanel } from "@/components/AuditPanel";
 import { ExceptionTable } from "@/components/ExceptionTable";
 import { SeverityBadge } from "@/components/SeverityBadge";
 import { inr, prettyCat } from "@/lib/format";
+import { inrExact } from "../../shared/money";
 import { publicErrorMessage } from "../../shared/errors";
 import { normalizeAmount, normalizeConfidence } from "../../shared/numbers";
 
@@ -237,6 +238,9 @@ function VisualOutput({ id, output, exceptionId }: { id: string; output: Record<
       {id === "investigator" && (
         <>
           <div className="text-sm text-ink">{String(output.root_cause || output.summary || "")}</div>
+          {typeof output.hypothesis === "string" && output.hypothesis ? (
+            <p className="text-xs text-warning">{String(output.hypothesis)}</p>
+          ) : null}
           {conf != null && (
             <div>
               <div className="mb-1 flex justify-between text-[11px] text-muted">
@@ -265,7 +269,7 @@ function VisualOutput({ id, output, exceptionId }: { id: string; output: Record<
             return (
               <li key={i}>
                 <span className="font-semibold uppercase text-cyan-300">{String(row.action ?? row.type ?? "act")}</span>
-                {row.amount != null ? <span className="ml-2 text-danger">{inr(normalizeAmount(row.amount), true)}</span> : null}
+                {row.amount != null ? <span className="ml-2 text-danger">{inrExact(normalizeAmount(row.amount))}</span> : null}
                 {row.rationale ? <div className="text-muted">{String(row.rationale)}</div> : null}
               </li>
             );
@@ -273,37 +277,13 @@ function VisualOutput({ id, output, exceptionId }: { id: string; output: Record<
         </ul>
       )}
       {id === "auditor" && (
-        <>
-          {(() => {
-            const status = String(output.verdict ?? output.signoff ?? output.status ?? "");
-            if (!status) return null;
-            const badge = <SeverityBadge value={status} />;
-            if ((status === "needs_review" || status === "rejected") && exceptionId) {
-              return (
-                <Link to={`/review/${encodeURIComponent(exceptionId)}`} className="inline-flex" title="Open human review">
-                  {badge}
-                </Link>
-              );
-            }
-            return badge;
-          })()}
-          {output.source === "deterministic" || output.source === "skeleton" ? (
-            <p className="text-[11px] uppercase tracking-wide text-muted">Deterministic fallback</p>
-          ) : null}
-          {output.verification === "unverified" && (
-            <p className="text-xs text-warning">Unverified — grounding check failed. Do not treat as fact.{exceptionId ? " " : ""}{exceptionId ? <Link to={`/review/${encodeURIComponent(exceptionId)}`} className="underline">Open review</Link> : null}</p>
+        <div className="space-y-1" data-testid="auditor-step-summary">
+          {typeof output.cfo_one_liner === "string" && output.cfo_one_liner ? (
+            <p className="text-sm text-ink">{output.cfo_one_liner}</p>
+          ) : (
+            <p className="text-sm text-ink">Auditor step complete. See the review panel below.</p>
           )}
-          {typeof output.cfo_one_liner === "string" && <p className="text-sm text-ink">{output.cfo_one_liner}</p>}
-          {Array.isArray(output.checks) && (
-            <div className="flex flex-wrap gap-1">
-              {(output.checks as { name: string; result: string }[]).map((c) => (
-                <span key={c.name} className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${c.result === "pass" ? "bg-emerald-50 text-success" : "bg-red-50 text-danger"}`}>
-                  {c.result === "pass" ? "Pass" : "Fail"}
-                </span>
-              ))}
-            </div>
-          )}
-        </>
+        </div>
       )}
     </div>
   );

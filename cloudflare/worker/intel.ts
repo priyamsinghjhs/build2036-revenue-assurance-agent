@@ -6,20 +6,14 @@ import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import { networkRisk } from "./network";
 import { compileExpectedFeeExpr, persistAndRunTests, loadRuleTests, validateFeeExpression } from "./sqlRule";
 import { listSuggestionDecisions } from "./auditor";
-
-const ASK_VIEWS = [
-  "v_ask_kpis",
-  "v_ask_areas",
-  "v_ask_exceptions",
-  "v_ask_controls",
-  "v_ask_anomalies",
-  "v_ask_contracts",
-  "v_ask_cases",
-  "v_ask_files",
-  "v_ask_routing",
-  "v_ask_risks",
-  "v_ask_clearing",
-];
+import {
+  ASK_SCHEMA_PROMPT,
+  ASK_VIEWS,
+  groundedAnswer,
+  matchAskTemplate,
+  normalizeQuestion,
+  type AskTemplateHit,
+} from "./askTemplates";
 
 export async function evalQuality(db: AppDb) {
   try {
@@ -752,15 +746,16 @@ export function validateAskSql(sql: string): string {
   if (!/^\s*(with|select)\b/i.test(trimmed)) throw new Error("Only SELECT or WITH … SELECT is allowed");
   if (FORBIDDEN.test(trimmed)) throw new Error("Statement uses a disallowed keyword");
   const lower = trimmed.toLowerCase();
-  const mentioned = ASK_VIEWS.filter((v) => lower.includes(v));
-  if (!mentioned.length) throw new Error(`Query must use an allow-listed view: ${ASK_VIEWS.join(", ")}`);
-  // crude table names: reject unidentified relations after from/join
-  const rels = [...lower.matchAll(/\b(?:from|join)\s+([a-z_][a-z0-9_.]*)/g)].map((m) => m[1]);
+  const allow = ASK_VIEWS as readonly string[];
+  const mentioned = allow.filter((v) => lower.includes(v));
+  if (!mentioned.length) throw new Error(`Query must use an allow-listed view: ${allow.join(", ")}`);
+  // Don't treat EXTRACT(... FROM ...), SUBSTRING(... FROM ...) as table references.
+  const stripped = lower.replace(/\b(?:extract|substring|substr|overlay|trim)\s*\([^)]*\)/g, " ");
+  const rels = [...stripped.matchAll(/\b(?:from|join)\s+([a-z_][a-z0-9_.]*)/g)].map((m) => m[1]);
   for (const rel of rels) {
     const base = rel.split(".").pop()!;
-    if (!ASK_VIEWS.includes(base) && !mentioned.includes(base)) {
-      throw new Error(`Relation ${rel} is not on the allow list`);
-    }
+    if ((ASK_VIEWS as readonly string[]).includes(base) || mentioned.includes(base)) continue;
+    throw new Error(`Relation ${rel} is not on the allow list`);
   }
   const limited = /\blimit\s+\d+\b/i.test(trimmed)
     ? trimmed.replace(/\blimit\s+(\d+)\b/i, (_, n) => `LIMIT ${Math.min(Number(n), 200)}`)
@@ -768,57 +763,132 @@ export function validateAskSql(sql: string): string {
   return limited;
 }
 
-const ASK_WRITE = /\b(insert|update|delete|drop|alter|create|grant|revoke|truncate|copy|vacuum|security)\b/i;
+const ASK_WRITE = /^\s*(insert|update|delete|drop|alter|create|grant|revoke|truncate|copy|vacuum)\b/i;
+
+type AskCacheEntry = {
+  at: number;
+  payload: Record<string, unknown>;
+};
+const ASK_CACHE = new Map<string, AskCacheEntry>();
+const ASK_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function cacheKey(question: string): string {
+  return normalizeQuestion(question);
+}
+
+async function logAsk(db: AppDb, question: string, sqlText: string, status: string, error?: string, rowCount?: number) {
+  try {
+    if (status === "ok") {
+      await db
+        .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, row_count) VALUES (?, now(), ?, ?, 'ok', ?)")
+        .bind(crypto.randomUUID(), question, sqlText, rowCount ?? 0)
+        .run();
+    } else {
+      await db
+        .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, error) VALUES (?, now(), ?, ?, ?, ?)")
+        .bind(crypto.randomUUID(), question, sqlText, status, error ?? "")
+        .run();
+    }
+  } catch {
+    /* log table may be absent on a stale schema */
+  }
+}
+
+async function llmSql(env: Env, question: string, repair?: { sql: string; error: string }): Promise<string> {
+  const prompt = repair
+    ? `The previous SQL failed. Write one corrected PostgreSQL SELECT. ${ASK_SCHEMA_PROMPT}\nQuestion: ${question}\nPrevious SQL:\n${repair.sql}\nError: ${repair.error}\nSQL:`
+    : `You write one PostgreSQL SELECT for a synthetic revenue-assurance book. ${ASK_SCHEMA_PROMPT}\nQuestion: ${question}\nSQL:`;
+  const raw = await complete(env.AI, prompt, { max_tokens: 256, timeout_ms: 12_000 });
+  return raw.trim().replace(/^```(?:sql)?\s*/i, "").replace(/\s*```$/, "");
+}
 
 export async function askData(env: Env, question: string) {
   const db = getDb(env);
-  const views = ASK_VIEWS.join(", ");
-  let generated = "";
+  const started = Date.now();
   const trimmedQ = question.trim();
-  // Never send writes or stacked statements to Workers AI (saves the free neuron cap and fails closed).
+  const key = cacheKey(trimmedQ);
+  const hit = ASK_CACHE.get(key);
+  if (hit && Date.now() - hit.at < ASK_CACHE_TTL_MS) {
+    return { ...hit.payload, question, cached: true, timing_ms: Date.now() - started };
+  }
+
+  // Reject only questions that ARE write/stacked SQL — not English that happens to contain "drop" or "update".
   if (ASK_WRITE.test(trimmedQ) || /;\s*\S/.test(trimmedQ)) {
     const err = "Only a single allow-listed SELECT is permitted. Write and multi-statement questions are rejected without execution.";
-    await db
-      .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, error) VALUES (?, now(), ?, ?, 'rejected', ?)")
-      .bind(crypto.randomUUID(), question, "", err)
-      .run();
-    return { question, sql: "", status: "rejected" as const, error: err, rows: [] as Record<string, unknown>[] };
+    await logAsk(db, question, "", "rejected", err);
+    return { question, sql: "", status: "rejected" as const, error: err, rows: [] as Record<string, unknown>[], answer: err, source: "rejected", cached: false, timing_ms: Date.now() - started };
   }
+
+  const template: AskTemplateHit | null = /^\s*(with|select)\b/i.test(trimmedQ) ? null : matchAskTemplate(trimmedQ);
+  let generated = "";
+  let source: "template" | "llm" | "sql" = "llm";
   if (/^\s*(with|select)\b/i.test(trimmedQ)) {
     generated = trimmedQ;
+    source = "sql";
+  } else if (template) {
+    generated = template.sql;
+    source = "template";
   } else {
-    const raw = await complete(
-      env.AI,
-      `You write one PostgreSQL SELECT for a synthetic revenue-assurance book. Use only these views: ${views}. Columns are self-explanatory (area, leakage, category, merchant_id, status, metric, day, value, policy, approval_uplift, fee_savings, case_id, risk_id). Reply with SQL only, no markdown. Limit 50 rows. Question: ${question}`,
-    );
-    generated = raw.trim().replace(/^```(?:sql)?\s*/i, "").replace(/\s*```$/, "");
+    try {
+      generated = await llmSql(env, trimmedQ);
+      source = "llm";
+    } catch (e) {
+      const err = e instanceof Error ? e.message : String(e);
+      await logAsk(db, question, "", "error", err);
+      return {
+        question, sql: "", status: "error" as const, error: "The model could not write SQL in time. Retry, or pick a suggested question.",
+        rows: [] as Record<string, unknown>[], answer: "", source: "llm", cached: false, timing_ms: Date.now() - started,
+      };
+    }
   }
-  let sqlText: string;
-  try {
-    sqlText = validateAskSql(generated);
-  } catch (e) {
-    const err = e instanceof Error ? e.message : String(e);
-    await db
-      .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, error) VALUES (?, now(), ?, ?, 'rejected', ?)")
-      .bind(crypto.randomUUID(), question, generated, err)
-      .run();
-    return { question, sql: generated, status: "rejected", error: err, rows: [] as Record<string, unknown>[] };
-  }
-  try {
-    // Defence in depth: read-only transaction + role + timeout
+
+  const tryRun = async (sqlCandidate: string) => {
+    const sqlText = validateAskSql(sqlCandidate);
     const rows = await runReadOnly(env, sqlText);
-    await db
-      .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, row_count) VALUES (?, now(), ?, ?, 'ok', ?)")
-      .bind(crypto.randomUUID(), question, sqlText, rows.length)
-      .run();
-    return { question, sql: sqlText, status: "ok", rows };
+    return { sqlText, rows };
+  };
+
+  let sqlText = generated;
+  try {
+    let ran: { sqlText: string; rows: Record<string, unknown>[] };
+    try {
+      ran = await tryRun(generated);
+    } catch (first) {
+      const firstErr = first instanceof Error ? first.message : String(first);
+      if (source === "llm") {
+        const repaired = await llmSql(env, trimmedQ, { sql: generated, error: firstErr });
+        ran = await tryRun(repaired);
+        generated = repaired;
+      } else {
+        throw first;
+      }
+    }
+    sqlText = ran.sqlText;
+    const answer = groundedAnswer(trimmedQ, ran.rows, template);
+    await logAsk(db, question, sqlText, "ok", undefined, ran.rows.length);
+    const payload = {
+      question,
+      sql: sqlText,
+      status: "ok" as const,
+      rows: ran.rows,
+      answer,
+      source,
+      template_id: template?.id ?? null,
+      cached: false,
+      timing_ms: Date.now() - started,
+    };
+    ASK_CACHE.set(key, { at: Date.now(), payload });
+    return payload;
   } catch (e) {
     const err = e instanceof Error ? e.message : String(e);
-    await db
-      .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, error) VALUES (?, now(), ?, ?, 'error', ?)")
-      .bind(crypto.randomUUID(), question, sqlText, err.slice(0, 500))
-      .run();
-    return { question, sql: sqlText, status: "error", error: publicAskError(err), rows: [] as Record<string, unknown>[] };
+    const rejected = /allow-listed|not allowed|disallowed|single SELECT|Only SELECT/i.test(err);
+    const status = rejected ? "rejected" : "error";
+    const publicErr = rejected ? err : publicAskError(err);
+    await logAsk(db, question, sqlText || generated, status, err.slice(0, 500));
+    return {
+      question, sql: sqlText || generated, status, error: publicErr, rows: [] as Record<string, unknown>[],
+      answer: "", source, cached: false, timing_ms: Date.now() - started,
+    };
   }
 }
 
@@ -887,6 +957,6 @@ export async function graphTools(db: AppDb, opts: { merchant_id?: string; except
     path: paths ?? [],
     rings: rings ?? [],
     proximity,
-    note: "Graph tools run as deterministic SQL (recursive CTEs / entity edges) and are attached to the investigator; the model does not query the database itself.",
+    note: "Merchant-to-acquirer path, refund or chargeback rings, and closeness to known-bad entities. These links come from the ledger; they are not invented.",
   };
 }

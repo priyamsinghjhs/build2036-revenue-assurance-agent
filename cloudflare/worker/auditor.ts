@@ -7,6 +7,7 @@
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import type { AppDb } from "./pg";
 import type { GroundingResult } from "./grounding";
+import { inrExact } from "../shared/money";
 
 export const AUDIT_CHECK_NAMES = [
   "amount_reconciliation",
@@ -59,7 +60,7 @@ export const AUDITOR_SCHEMA = `{
 }`;
 
 const VERDICTS = new Set(["approved", "needs_review", "rejected"]);
-const RESULTS = new Set(["pass", "fail"]);
+const RESULTS = new Set(["pass", "fail", "n/a", "na"]);
 const SEVERITIES = new Set(["high", "medium", "low"]);
 const ACTIONS = new Set([
   "request_file",
@@ -74,7 +75,7 @@ const ACTIONS = new Set([
 ]);
 const MAPS = new Set(["action_queue", "draft_dispute", "draft_data_request", "case"]);
 
-export type AuditCheck = { name: AuditCheckName; result: "pass" | "fail"; evidence: string; source: string };
+export type AuditCheck = { name: AuditCheckName; result: "pass" | "fail" | "n/a"; evidence: string; source: string };
 export type AuditFinding = { issue: string; severity: "high" | "medium" | "low"; impact: number };
 export type AuditSuggestion = {
   suggestion_id: string;
@@ -164,7 +165,7 @@ export function cfoLineForVerdict(
   leakage?: number | null,
 ): string {
   const subject = who.trim() || "this exception";
-  const leak = leakage != null && Number.isFinite(Number(leakage)) ? `, leakage ${leakage}` : "";
+  const leak = leakage != null && Number.isFinite(Number(leakage)) ? `, leakage ${inrExact(Number(leakage))}` : "";
   if (verdict === "approved") return `Auditor is ready to sign off ${subject}${leak}.`;
   if (verdict === "rejected") return `Auditor rejected ${subject}${leak}.`;
   return `Auditor needs review on ${subject}${leak}.`;
@@ -209,7 +210,7 @@ export function normalizeAuditorOutput(raw: Record<string, unknown>, fallback?: 
       const name = mapCheckName(asStr(rec.name ?? rec.check ?? rec.id));
       if (!name) continue;
       const rawResult = asStr(rec.result ?? rec.status ?? rec.outcome).toLowerCase();
-      const result: "pass" | "fail" = RESULTS.has(rawResult) ? (rawResult as "pass" | "fail") : rawResult === "ok" || rawResult === "passed" ? "pass" : "fail";
+      const result: AuditCheck["result"] = rawResult === "n/a" || rawResult === "na" || rawResult === "not applicable" ? "n/a" : RESULTS.has(rawResult) && rawResult !== "n/a" && rawResult !== "na" ? (rawResult as "pass" | "fail") : rawResult === "ok" || rawResult === "passed" ? "pass" : "fail";
       checksByName.set(name, {
         name,
         result,
@@ -335,8 +336,12 @@ export function buildAuditorSkeleton(
   const inv = priors.find((p) => p.agent === "investigator");
   const evidencePass = Boolean(inv && inv.output && typeof inv.output === "object" && (inv.output as { root_cause?: unknown }).root_cause);
 
-  const missingFile = /missing|file|drop/i.test(category) || /files|scheme/i.test(area);
-  const policyPass = !missingFile && !/expired|wrong_rate|unapplied|mismatch/i.test(category);
+  const missingFile = /missing|file|drop/i.test(category) || /files/.test(area);
+  const amountVariance = expected != null && actual != null && Math.abs(expected - actual) > 0.05;
+  const underPayout = /under_payout|over_payout|reserve/.test(category) || (area === "payouts" && amountVariance);
+  const policyBreach = missingFile || underPayout || /expired|wrong_rate|unapplied|mismatch|under_payout|over_payout|variance/.test(category);
+  const policyPass = !policyBreach;
+  const policyNA = !policyBreach && !category && !area;
 
   const hasCase = Boolean(text(facts, "case_id") || (input && typeof input === "object" && "case" in (input as object)));
   const groundingPass = grounding ? grounding.passed : true;
@@ -344,9 +349,9 @@ export function buildAuditorSkeleton(
   const cite = [
     ref && `ref ${ref}`,
     merchant && `merchant ${merchant}`,
-    expected != null && `expected ${expected}`,
-    actual != null && `actual ${actual}`,
-    leakage != null && `leakage ${leakage}`,
+    expected != null && `expected ${inrExact(expected)}`,
+    actual != null && `actual ${inrExact(actual)}`,
+    leakage != null && `leakage ${inrExact(leakage)}`,
   ]
     .filter(Boolean)
     .join(", ");
@@ -373,13 +378,17 @@ export function buildAuditorSkeleton(
     },
     {
       name: "policy_compliance",
-      result: policyPass ? "pass" : "fail",
-      evidence: policyPass
+      result: policyNA ? "n/a" : policyPass ? "pass" : "fail",
+      evidence: policyNA
+        ? "No payout, contract or file policy clause was present in the facts, so this check is not applicable."
+        : policyPass
         ? `No policy or contract breach is flagged in the provided facts for ${ref || "this item"}.`
-        : missingFile
-          ? `Policy requires a complete scheme/bank/APM file before sign-off. Category ${category || area || "n/a"} indicates a missing or dropped file.`
-          : `Category ${category || "n/a"} indicates a policy or contract variance.`,
-      source: "control / file-completeness policy",
+        : underPayout && expected != null && actual != null
+          ? `Payout policy requires the merchant payout to equal the expected net after reserves. Expected ${inrExact(expected)} versus paid ${inrExact(actual)}${leakage != null ? `, shortfall ${inrExact(leakage)}` : ""}.`
+          : missingFile
+          ? `Policy requires a complete scheme, bank or APM file before sign-off. The category ${category.replace(/_/g, " ") || area || "n/a"} indicates a missing or dropped file.`
+          : `Category ${category.replace(/_/g, " ") || "n/a"} indicates a policy or contract variance.`,
+      source: "payout and contract policy",
     },
     {
       name: "duplicate_prior_case",
@@ -417,6 +426,41 @@ export function buildAuditorSkeleton(
   }
 
   const suggestions: AuditSuggestion[] = [];
+  if (underPayout) {
+    const short = leakage ?? (expected != null && actual != null ? Math.abs(expected - actual) : 0);
+    suggestions.push(
+      {
+        suggestion_id: "sug-1",
+        action: "recover",
+        title: `Recover ${inrExact(short)} from the payout run${ref ? " " + ref : ""}`,
+        owner_team: "Treasury",
+        priority: "high",
+        expected_recovery: short,
+        maps_to: "action_queue",
+        rationale: `The payout was short of the expected net${expected != null && actual != null ? ` (${inrExact(expected)} expected versus ${inrExact(actual)} paid)` : ""}. Recover the difference from this payout run. A human must accept the proposal before anything is sent.`,
+      },
+      {
+        suggestion_id: "sug-2",
+        action: "adjust_rule",
+        title: "Correct the reserve calculation",
+        owner_team: "Treasury",
+        priority: "high",
+        expected_recovery: 0,
+        maps_to: "action_queue",
+        rationale: "Hypothesis: an incorrect reserves calculation may explain the shortfall. Recalculate the held reserve against the payout policy and post a correction. This cause is not proven by the exception facts alone.",
+      },
+      {
+        suggestion_id: "sug-3",
+        action: "recover",
+        title: "Adjust the next payout",
+        owner_team: "Treasury",
+        priority: "medium",
+        expected_recovery: short,
+        maps_to: "action_queue",
+        rationale: `If the shortfall cannot be recovered from this run, add ${inrExact(short)} to the next merchant payout after a human approves the adjustment.`,
+      },
+    );
+  }
   if (missingFile && (ref || exceptionId)) {
     suggestions.push({
       suggestion_id: "sug-1",
@@ -433,7 +477,7 @@ export function buildAuditorSkeleton(
     suggestions.push({
       suggestion_id: suggestions.length ? `sug-${suggestions.length + 1}` : "sug-1",
       action: "recover",
-      title: `Recover false-decline lost revenue${ref ? " for " + ref : ""}${leakage != null ? " (" + leakage + ")" : ""}`,
+      title: `Recover false-decline lost revenue${ref ? " for " + ref : ""}${leakage != null ? " (" + inrExact(leakage) + ")" : ""}`,
       owner_team: "Auth ops",
       priority: "high",
       expected_recovery: leakage ?? 0,
@@ -455,13 +499,13 @@ export function buildAuditorSkeleton(
         : "Chargeback risk is elevated on the synthetic model. Draft a dispute in-app; nothing is sent until a human approves export.",
     });
   }
-  if (leakage != null && leakage > 0 && area !== "false_declines") {
+  if (!underPayout && leakage != null && leakage > 0 && area !== "false_declines") {
     suggestions.push({
       suggestion_id: suggestions.length ? "sug-2" : "sug-1",
       action: leakage < 500 ? "write_off" : "recover",
       title: leakage < 500
-        ? `Write off ${leakage} (below the auto-close threshold) after human approval`
-        : `Recover ${leakage}${merchant ? " from " + merchant : ""}${ref ? " for " + ref : ""}`,
+        ? `Write off ${inrExact(leakage)} (below the auto-close threshold) after human approval`
+        : `Recover ${inrExact(leakage)}${merchant ? " from " + merchant : ""}${ref ? " for " + ref : ""}`,
       owner_team: "Finance",
       priority: leakage >= 10000 ? "high" : "medium",
       expected_recovery: leakage < 500 ? 0 : leakage,
@@ -471,7 +515,7 @@ export function buildAuditorSkeleton(
         : "Recover the leakage computed in the SQL facts. The Action Queue item stays proposed until approved.",
     });
   }
-  if (missingFile || (leakage != null && leakage >= 1000)) {
+  if (!underPayout && (missingFile || (leakage != null && leakage >= 1000))) {
     suggestions.push({
       suggestion_id: `sug-${suggestions.length + 1}`,
       action: "dispute_draft",
@@ -502,11 +546,7 @@ export function buildAuditorSkeleton(
   const rationale = failed
     ? `Audit of ${who} found ${failed} failed check(s). ${citeOr}. Suggestions are proposals only and require human acceptance.`
     : `Audit of ${who} passed the structured checks. ${citeOr}.`;
-  const cfo = leakage != null
-    ? (verdict === "approved"
-      ? `Auditor is ready to sign off ${who}, leakage ${leakage}.`
-      : `Auditor needs review on ${who}, leakage ${leakage}.`)
-    : (verdict === "approved" ? `Auditor is ready to sign off ${who}.` : `Auditor needs review on ${who}.`);
+  const cfo = cfoLineForVerdict(verdict, who, leakage);
 
   return {
     verdict,
@@ -542,7 +582,32 @@ export function finalizeAuditorOutput(
       g.evidence = `Grounding check failed: ${grounding.unsupported.map((c) => `${c.kind}:${c.value}`).join(", ")}. Do not treat as fact.`;
     }
   }
+  if (!out.suggestions.length && skeleton.suggestions.length) {
+    out.suggestions = skeleton.suggestions;
+  }
+  const facts = walkFacts(input);
+  for (const p of priors) walkFacts(p.output, facts);
+  const cat = text(facts, "category", "issue");
+  const area = text(facts, "area", "focus_domain", "domain");
+  if ((/under_payout|over_payout/.test(cat) || area === "payouts") && skeleton.suggestions.length >= 3) {
+    const havePayoutSug = out.suggestions.some((s) => /payout run|reserve calculation|next payout/i.test(s.title + s.rationale));
+    if (!havePayoutSug) out.suggestions = skeleton.suggestions;
+  }
+  for (const c of out.checks) c.evidence = plainEnglishEvidence(c.evidence);
+  out.rationale = plainEnglishEvidence(out.rationale);
+  out.cfo_one_liner = plainEnglishEvidence(out.cfo_one_liner);
+  if (out.compliance_notes) out.compliance_notes = plainEnglishEvidence(out.compliance_notes);
   return alignCfoToVerdict(out);
+}
+
+function plainEnglishEvidence(s: string): string {
+  return String(s ?? "")
+    .replace(/graph_tools[^.,;]*/gi, "the merchant-to-acquirer path and related risk links")
+    .replace(/\b(paths, rings, proximity)\b/gi, "related risk links")
+    .replace(/\bra_[a-z0-9_]+\b/gi, "the ledger")
+    .replace(/\bv_ask_[a-z0-9_]+\b/gi, "the summary view")
+    .replace(/\b(\d{4,}\.\d+)\s*INR\b/g, (_, n) => inrExact(Number(n)))
+    .replace(/\bINR\s*(\d{4,}(?:\.\d+)?)/g, (_, n) => inrExact(Number(n)));
 }
 
 export async function listSuggestionDecisions(db: AppDb, exceptionId: string) {
