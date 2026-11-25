@@ -380,6 +380,11 @@ export async function runAgentStep(
       }
     }
   }
+  grounding = checkGrounding(output, user);
+  if (output && typeof output === "object" && grounding.hypothesis) {
+    output.hypothesis_faithfulness = Math.round(grounding.hypothesis.faithfulness * 1000) / 1000;
+    output.hypothesis_claims = grounding.hypothesis.claims;
+  }
   let passed = grounding.passed;
   if (!passed) {
     const unsupported = grounding.unsupported.map((c) => `${c.kind}:${c.value}`);

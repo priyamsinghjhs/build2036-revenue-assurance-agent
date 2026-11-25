@@ -53,7 +53,7 @@ export const AUDITOR_SCHEMA = `{
   "verdict":"approved|needs_review|rejected",
   "checks":[{"name":"amount_reconciliation|evidence_completeness|policy_compliance|duplicate_prior_case|segregation_of_duties|grounding","result":"pass|fail","evidence":"cite IDs and amounts from INPUT only","source":"query or rule"}],
   "findings":[{"issue":"short","severity":"high|medium|low","impact":0}],
-  "suggestions":[{"suggestion_id":"sug-1","action":"request_file|recover|dispute_draft|data_request_draft|adjust_rule|escalate|write_off","title":"short concrete next step","owner_team":"Scheme|Finance|Tax|Ops|Compliance","priority":"high|medium|low","expected_recovery":0,"maps_to":"action_queue|draft_dispute|draft_data_request|case","rationale":"short"}],
+  "suggestions":[{"suggestion_id":"sug-1","action":"request_file|recover|dispute_draft|data_request_draft|adjust_rule|escalate|write_off","title":"short concrete next step","owner_team":"Scheme|Finance|Tax|Ops|Compliance","priority":"high|medium|low","expected_recovery":0,"maps_to":"action_queue|draft_dispute|draft_data_request|case","rationale":"short","kind":"fact|recommendation","citation":"₹ amount or ID from INPUT, or omit and tag recommendation"}],
   "confidence":80,
   "rationale":"one short paragraph",
   "cfo_one_liner":"one sentence"
@@ -86,6 +86,8 @@ export type AuditSuggestion = {
   expected_recovery: number;
   maps_to: string;
   rationale: string;
+  kind?: "fact" | "recommendation";
+  citation?: string;
 };
 export type AuditorOutput = {
   verdict: "approved" | "needs_review" | "rejected";
@@ -284,6 +286,37 @@ export function normalizeAuditorOutput(raw: Record<string, unknown>, fallback?: 
     source: resolveAuditorSource(raw, isValidAuditorShape(raw)),
   };
   return alignCfoToVerdict(out);
+}
+
+
+function figuresClose(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 0.02 || (b !== 0 && Math.abs(a - b) / Math.abs(b) <= 0.002);
+}
+
+/** Tag each suggestion as a cited fact or as a recommendation (not scored as a hallucination). */
+export function annotateSuggestion(s: AuditSuggestion, facts: Record<string, unknown>): AuditSuggestion {
+  const rationale = s.rationale || "";
+  if (/^hypothesis\b/i.test(rationale) || /is not proven/i.test(rationale) || /may explain/i.test(rationale)) {
+    return { ...s, kind: "recommendation", citation: s.citation };
+  }
+  const leak = num(facts, "leakage", "amount", "difference", "shortfall", "expected_recovery");
+  const expected = num(facts, "expected", "expected_amount", "expected_net");
+  const actual = num(facts, "actual", "actual_amount", "paid");
+  const ref = text(facts, "ref_id", "recon_ref", "ref", "exception_id");
+  const cites: string[] = [];
+  if (s.expected_recovery && leak != null && figuresClose(s.expected_recovery, leak)) {
+    cites.push(`${inrExact(leak)}${ref ? " on " + ref : ""}`);
+  } else if (s.expected_recovery && expected != null && actual != null && figuresClose(s.expected_recovery, Math.abs(expected - actual))) {
+    cites.push(`${inrExact(expected)} expected versus ${inrExact(actual)} paid`);
+  }
+  if (cites.length) return { ...s, kind: "fact", citation: cites.join("; ") };
+  return { ...s, kind: s.kind === "fact" ? "fact" : "recommendation", citation: s.citation };
+}
+
+function annotateAll(suggestions: AuditSuggestion[], input: unknown, priors: { output: unknown }[] = []): AuditSuggestion[] {
+  const facts = walkFacts(input);
+  for (const p of priors) walkFacts(p.output, facts);
+  return suggestions.map((s) => annotateSuggestion(s, facts));
 }
 
 function emptySkeleton(): AuditorOutput {
@@ -597,6 +630,7 @@ export function finalizeAuditorOutput(
   out.rationale = plainEnglishEvidence(out.rationale);
   out.cfo_one_liner = plainEnglishEvidence(out.cfo_one_liner);
   if (out.compliance_notes) out.compliance_notes = plainEnglishEvidence(out.compliance_notes);
+  out.suggestions = annotateAll(out.suggestions, input, priors);
   return alignCfoToVerdict(out);
 }
 

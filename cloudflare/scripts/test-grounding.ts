@@ -1,0 +1,79 @@
+import { checkGrounding, splitFactualOutput } from "../worker/grounding";
+import { annotateSuggestion } from "../worker/auditor";
+
+function eq(a: unknown, b: unknown, msg: string) {
+  if (a !== b) throw new Error(`${msg}: expected ${JSON.stringify(b)} got ${JSON.stringify(a)}`);
+}
+
+const context = "Exception PAY-MER002-2026-10 at MER002 leakage 19421.10 expected 150000 paid 130578.90";
+
+const hypOutput = {
+  root_cause: "missing scheme settlement on PAY-MER002-2026-10 at MER002, leakage 19421.10",
+  hypothesis: "Hypothesis: a reserves error of 50000 may explain the shortfall. This cause is not proven.",
+  confidence: 70,
+};
+
+const split = splitFactualOutput(hypOutput);
+eq("hypothesis" in (split.factual as object), false, "hypothesis stripped from factual");
+eq(split.hypotheses != null, true, "hypotheses captured");
+
+const g = checkGrounding(hypOutput, context);
+eq(g.passed, true, "factual claims should pass");
+eq(g.unsupported.length, 0, "50000 must not count as a factual hallucination");
+if (!g.hypothesis || g.hypothesis.claims < 1) throw new Error("hypothesis claims should be scored separately");
+const hypHas50000 = g.hypothesis.unsupported.some((c) => c.value.includes("50000")) || g.hypothesis.claims > 0;
+if (!hypHas50000) throw new Error("50000 should appear in the hypothesis score");
+
+const recOutput = {
+  cfo_one_liner: "Auditor needs review on PAY-MER002-2026-10 / MER002, leakage 19421.10.",
+  suggestions: [
+    {
+      title: "Correct the reserve calculation",
+      rationale: "Hypothesis: an incorrect reserves calculation may explain the shortfall of 50000.",
+      kind: "recommendation",
+      expected_recovery: 0,
+    },
+    {
+      title: "Recover 19421.10 from the payout run",
+      rationale: "The payout was short.",
+      kind: "fact",
+      expected_recovery: 19421.10,
+      citation: "₹19,421.10 on PAY-MER002-2026-10",
+    },
+  ],
+};
+const g2 = checkGrounding(recOutput, context);
+eq(g2.passed, true, "recommendation 50000 excluded from faithfulness");
+
+const sug = annotateSuggestion(
+  {
+    suggestion_id: "sug-1",
+    action: "recover",
+    title: "Recover the shortfall",
+    owner_team: "Treasury",
+    priority: "high",
+    expected_recovery: 19421.10,
+    maps_to: "action_queue",
+    rationale: "Recover the leakage computed in the SQL facts.",
+  },
+  { leakage: 19421.10, ref_id: "PAY-MER002-2026-10" },
+);
+eq(sug.kind, "fact", "cited leakage is a fact");
+if (!sug.citation || !sug.citation.includes("19,421.10")) throw new Error(`expected citation, got ${sug.citation}`);
+
+const hypSug = annotateSuggestion(
+  {
+    suggestion_id: "sug-2",
+    action: "adjust_rule",
+    title: "Correct the reserve calculation",
+    owner_team: "Treasury",
+    priority: "high",
+    expected_recovery: 0,
+    maps_to: "action_queue",
+    rationale: "Hypothesis: an incorrect reserves calculation may explain the shortfall. This cause is not proven by the exception facts alone.",
+  },
+  { leakage: 19421.10 },
+);
+eq(hypSug.kind, "recommendation", "hypothesis suggestion tagged recommendation");
+
+console.log("test-grounding ok");

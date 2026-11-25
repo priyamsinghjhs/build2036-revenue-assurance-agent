@@ -594,6 +594,8 @@ export type AuditSuggestion = {
   expected_recovery: number;
   maps_to: string;
   rationale: string;
+  kind?: "fact" | "recommendation";
+  citation?: string;
 };
 
 export type SuggestionDecision = {

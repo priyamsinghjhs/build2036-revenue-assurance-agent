@@ -3,6 +3,7 @@ import { api, type AuditSuggestion, type SuggestionDecision } from "@/api";
 import { Button } from "@/components/ui/button";
 import { SeverityBadge } from "@/components/SeverityBadge";
 import { inrExact } from "../../shared/money";
+import { formatConfidence } from "@/lib/format";
 
 const CHECK_LABELS: Record<string, string> = {
   amount_reconciliation: "Amount reconciliation",
@@ -30,6 +31,8 @@ function asSuggestions(output: Record<string, unknown>): AuditSuggestion[] {
     expected_recovery: Number(s.expected_recovery ?? s.amount ?? 0),
     maps_to: String(s.maps_to ?? "action_queue"),
     rationale: String(s.rationale ?? s.reason ?? ""),
+    kind: s.kind === "recommendation" || s.kind === "fact" ? (s.kind as "recommendation" | "fact") : undefined,
+    citation: s.citation ? String(s.citation) : undefined,
   }));
 }
 
@@ -115,7 +118,7 @@ export function AuditPanel({
           </span>
         ) : null}
         {output.confidence != null && (
-          <span className="text-[11px] text-muted">Confidence {String(output.confidence)}%</span>
+          <span className="text-[11px] text-muted">Confidence {formatConfidence(output.confidence)}</span>
         )}
       </div>
       {summary && (
@@ -188,6 +191,11 @@ export function AuditPanel({
                         Owner {s.owner_team} · {s.priority} priority
                         {s.expected_recovery ? ` · recover ${inrExact(s.expected_recovery)}` : ""}
                       </p>
+                      {s.kind === "recommendation" ? (
+                        <span className="mt-1 inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning">Recommendation</span>
+                      ) : s.citation ? (
+                        <span className="mt-1 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-muted">Evidence {s.citation}</span>
+                      ) : null}
                     </div>
                   </div>
                   {s.rationale && <p className="mt-1 text-xs text-muted">{s.rationale}</p>}

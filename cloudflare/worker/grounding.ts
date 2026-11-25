@@ -17,6 +17,8 @@ export type GroundingResult = {
   faithfulness: number;
   unsupported: GroundingClaim[];
   passed: boolean;
+  /** Hypotheses and tagged recommendations, scored separately — not in faithfulness. */
+  hypothesis?: { claims: number; supported: number; faithfulness: number; unsupported: GroundingClaim[] };
 };
 
 const GENERIC_NUM = new Set(["0", "0.0", "0.00", "0.0000", "1", "2", "3", "4", "5", "10", "100"]);
@@ -104,11 +106,52 @@ function extractClaims(output: unknown): GroundingClaim[] {
   return claims;
 }
 
+
+const HYPOTHESIS_KEYS = new Set([
+  "hypothesis", "hypotheses", "hunch", "possible_cause", "possible_causes", "hunches",
+]);
+
+/** Split facts from labelled hypotheses / recommendation-only suggestions. */
+export function splitFactualOutput(output: unknown): { factual: unknown; hypotheses: unknown } {
+  if (output == null || typeof output !== "object" || Array.isArray(output)) {
+    return { factual: output, hypotheses: null };
+  }
+  const rec = output as Record<string, unknown>;
+  const factual: Record<string, unknown> = {};
+  const hypotheses: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(rec)) {
+    if (HYPOTHESIS_KEYS.has(k.toLowerCase())) {
+      hypotheses[k] = v;
+      continue;
+    }
+    if (k === "suggestions" && Array.isArray(v)) {
+      const factSugs: unknown[] = [];
+      const recSugs: unknown[] = [];
+      for (const item of v) {
+        if (item && typeof item === "object") {
+          const s = item as Record<string, unknown>;
+          const kind = String(s.kind ?? "");
+          const rationale = String(s.rationale ?? s.reason ?? s.why ?? "");
+          if (kind === "recommendation" || /^hypothesis\b/i.test(rationale) || /is not proven/i.test(rationale)) {
+            recSugs.push(item);
+            continue;
+          }
+        }
+        factSugs.push(item);
+      }
+      factual.suggestions = factSugs;
+      if (recSugs.length) hypotheses.recommendations = recSugs;
+      continue;
+    }
+    factual[k] = v;
+  }
+  return { factual, hypotheses: Object.keys(hypotheses).length ? hypotheses : null };
+}
+
 /** GroundedNumbers must be 1.0 — every extracted number/ID/date/entity is in the context. */
 export const GROUNDED_REQUIRED = 1.0;
 
-export function checkGrounding(output: unknown, context: unknown, threshold = GROUNDED_REQUIRED): GroundingResult {
-  const ctxStr = typeof context === "string" ? context : JSON.stringify(context);
+function scoreAgainstContext(output: unknown, ctxStr: string, threshold: number): GroundingResult {
   const { text, numbers } = tokenizeContext(ctxStr);
   const claims = extractClaims(output);
   for (const c of claims) {
@@ -127,6 +170,17 @@ export function checkGrounding(output: unknown, context: unknown, threshold = GR
   const critical = unsupported.filter((c) => c.kind === "id" || c.kind === "number" || c.kind === "entity");
   const passed = faithfulness >= threshold && unsupported.length === 0 && critical.length === 0;
   return { claims: claims.length, supported, faithfulness, unsupported, passed };
+}
+
+export function checkGrounding(output: unknown, context: unknown, threshold = GROUNDED_REQUIRED): GroundingResult {
+  const ctxStr = typeof context === "string" ? context : JSON.stringify(context);
+  const { factual, hypotheses } = splitFactualOutput(output);
+  const result = scoreAgainstContext(factual, ctxStr, threshold);
+  if (hypotheses) {
+    const hyp = scoreAgainstContext(hypotheses, ctxStr, 0);
+    result.hypothesis = { claims: hyp.claims, supported: hyp.supported, faithfulness: hyp.faithfulness, unsupported: hyp.unsupported };
+  }
+  return result;
 }
 
 export function retryPrompt(unsupported: GroundingClaim[]): string {

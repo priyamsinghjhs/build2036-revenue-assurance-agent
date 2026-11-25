@@ -1,4 +1,5 @@
 import type { AppDb } from "./pg";
+import { alignNarrativeToKpis } from "./brief";
 
 const AS_OF = "2026-11-21";
 
@@ -175,7 +176,7 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
     bullets = Array.isArray(brief.bullets) ? (brief.bullets as string[]) : [];
   }
 
-  return {
+  const payload: ExecPayload = {
     synthetic: true,
     timing_ms: Date.now() - t0,
     period: { from: "2026-10-01", to: "2026-10-31", as_of: AS_OF, label: "October 2026" },
@@ -261,6 +262,8 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
         }
       : null,
   };
+  payload.narrative = alignNarrativeToKpis(payload.narrative, payload);
+  return payload;
 }
 
 export async function listFilterOptions(db: AppDb) {

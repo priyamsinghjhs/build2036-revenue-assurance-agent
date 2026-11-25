@@ -11,7 +11,7 @@ import { Play, RefreshCw } from "lucide-react";
 import { api, type ActionRow, type AutomationLog, type EvalQuality, type LatestRun, type Roster } from "@/api";
 import { SeverityBadge, StatusDot } from "@/components/SeverityBadge";
 import { Button } from "@/components/ui/button";
-import { inr, prettyCat, pct } from "@/lib/format";
+import { formatConfidence, inr, prettyCat, pct } from "@/lib/format";
 import { publicErrorMessage } from "../../shared/errors";
 
 const DOMAINS = [
@@ -285,6 +285,9 @@ export default function AgentsPage() {
             <div>
               <h2 className="text-sm font-semibold text-ink">AI quality</h2>
               <p className="text-xs text-muted">{quality.note}</p>
+              <p className="mt-1 text-[11px] text-muted">
+                Hover a column header for the metric definition. Faithfulness and hallucination are measured on factual claims only; hypotheses and tagged recommendations are scored separately.
+              </p>
             </div>
             <div className="text-xs text-muted">
               Faithfulness {pct(quality.totals.faithfulness)} · {quality.totals.unverified} unverified · {quality.totals.retries} reworks · {quality.totals.n} scored outputs
@@ -297,10 +300,10 @@ export default function AgentsPage() {
                   <tr>
                     <th className="pb-2 pr-3">Agent</th>
                     <th className="pb-2 pr-3 text-right">Outputs</th>
-                    <th className="pb-2 pr-3 text-right">Faithfulness</th>
-                    <th className="pb-2 pr-3 text-right">Hallucination</th>
-                    <th className="pb-2 pr-3 text-right">Reworks</th>
-                    <th className="pb-2 text-right">Unverified</th>
+                    <th className="pb-2 pr-3 text-right" title="Share of extracted numbers, IDs, dates and entities in the factual output that also appear in the SQL context. Hypotheses are scored separately and are not counted here.">Faithfulness</th>
+                    <th className="pb-2 pr-3 text-right" title="1 minus faithfulness on factual claims only. Recommended next steps and labelled hypotheses are not treated as hallucinations.">Hallucination</th>
+                    <th className="pb-2 pr-3 text-right" title="How many times the model was asked to rewrite after a grounding failure, before a deterministic replacement.">Reworks</th>
+                    <th className="pb-2 text-right" title="Outputs that could not be grounded in the SQL facts and were sent to the review queue. A timeout now still runs the deterministic grounding check rather than skipping it.">Unverified</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -397,9 +400,9 @@ function AgentOutput({ output }: { output?: Record<string, unknown> }) {
         {chips.map((c) => (
           <SeverityBadge key={c} value={c} />
         ))}
-        {typeof output.confidence === "number" && (
+        {output.confidence != null && output.confidence !== "" && (
           <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-accent">
-            {(Number(output.confidence) * 100).toFixed(0)}% confidence
+            {formatConfidence(output.confidence)} confidence
           </span>
         )}
       </div>

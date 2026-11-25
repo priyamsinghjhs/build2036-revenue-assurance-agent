@@ -1,3 +1,4 @@
+export { formatConfidence, normalizeConfidence } from "../../shared/numbers";
 /** INR with Indian units: ₹ crore / lakh above the relevant thresholds. */
 export function inr(n: number, compact = false): string {
   const sign = n < 0 ? "−" : "";

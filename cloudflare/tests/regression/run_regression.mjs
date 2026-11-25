@@ -202,9 +202,17 @@ async function sectionKpiReconcile(sql) {
   const topHasExposure = liveTop.some((a) => EXPOSURE.includes(a));
   // After the chart fix + deploy, live top drivers must be book leakage only.
   const liveOk = live.ok && typeof liveLeak === "number" && !topHasExposure && Array.isArray(live.body?.compliance_exposure);
-  const countOk = Number(kpi.exception_count) === sumN;
+  const bookCountRows = await sql.query(`SELECT COUNT(*)::int AS n FROM ra_exception_rows WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')`);
+  const bookCount = Number(bookCountRows[0]?.n ?? 0);
+  const countOk = Number(kpi.exception_count) === bookCount;
   if (!countOk) {
-    card.remaining.push(`Test-branch KPI exception_count is ${kpi.exception_count} but book area_summary sums to ${sumN}. Leakage already matches (₹${Number(kpi.total_leakage).toFixed(2)}).`);
+    card.remaining.push(`Test-branch KPI exception_count is ${kpi.exception_count} but book exception row count is ${bookCount} (area_summary sum ${sumN} can differ because domains overlap). Leakage already matches (₹${Number(kpi.total_leakage).toFixed(2)}).`);
+  }
+  const liveNarrative = (live.body?.narrative?.bullets || []).join(" ");
+  const liveCount = Number(live.body?.kpis?.exception_count);
+  const narrativeOk = !live.ok || !liveCount || new RegExp(String(liveCount) + "\\s+open exceptions").test(liveNarrative);
+  if (live.ok && liveCount && !narrativeOk) {
+    card.remaining.push(`Live executive narrative does not cite the KPI open-exception count ${liveCount}.`);
   }
   if (topHasExposure) {
     card.bugs.push("Top leakage drivers included KYC/AML exposure (fixed: book-leakage-only chart + separate compliance exposure chart).");
@@ -212,12 +220,11 @@ async function sectionKpiReconcile(sql) {
   if (live.ok && !nearly(liveLeak, kpi.total_leakage, 1)) {
     card.notes.push(`Live exec leakage ₹${Number(liveLeak).toFixed(2)} is production; the test branch is ₹${Number(kpi.total_leakage).toFixed(2)} after planted breaks. They are not expected to match.`);
   }
-  const liveCount = Number(live.body?.kpis?.exception_count);
   if (live.ok && nearly(liveLeak, 856670.08, 0.05) && liveCount && liveCount < 217) {
     card.remaining.push(`Live Worker KPI exception_count is ${liveCount} while a refreshed book area_summary sums to 217. Leakage already matches ₹856670.08. The next 7:45 AM IST cron (after the hung-run fix that now calls refresh_ra_summaries) should align the count.`);
   }
-  const pass = leakOk && liveOk;
-  card.add("gap_detection", { functional: pass ? "pass" : "fail", technical: live.ok ? "pass" : "fail", detail: `branch book area_summary ₹${sumLeak.toFixed(2)} vs branch KPI ₹${Number(kpi.total_leakage).toFixed(2)}; live (prod) ₹${liveLeak}; top_drivers book-only=${!topHasExposure}; compliance_exposure chart=${Array.isArray(live.body?.compliance_exposure)}` });
+  const pass = leakOk && liveOk && countOk && narrativeOk;
+  card.add("gap_detection", { functional: pass ? "pass" : "fail", technical: live.ok ? "pass" : "fail", detail: `branch book area_summary ₹${sumLeak.toFixed(2)} vs branch KPI ₹${Number(kpi.total_leakage).toFixed(2)}; count KPI ${kpi.exception_count} vs book rows ${bookCount} (area_summary sum ${sumN}); live (prod) ₹${liveLeak} exceptions=${liveCount} narrative_ok=${narrativeOk}; top_drivers book-only=${!topHasExposure}; compliance_exposure chart=${Array.isArray(live.body?.compliance_exposure)}` });
   return { kpi, sumLeak, sumN, leakOk, countOk, liveTop, topHasExposure };
 }
 
@@ -994,10 +1001,12 @@ async function sectionTypecheck() {
   const tscW = spawnSync("npx", ["tsc", "-p", "tsconfig.worker.json", "--noEmit"], { cwd: ROOT, encoding: "utf8" });
   const tscA = spawnSync("npx", ["tsc", "-p", "tsconfig.app.json", "--noEmit"], { cwd: ROOT, encoding: "utf8" });
   const cfo = spawnSync("npx", ["tsx", "tests/auditor-cfo.test.ts"], { cwd: ROOT, encoding: "utf8" });
-  const ok = tscW.status === 0 && tscA.status === 0 && cfo.status === 0;
-  card.notes.push(`Typecheck worker ${tscW.status === 0 ? "ok" : "FAIL"} frontend ${tscA.status === 0 ? "ok" : "FAIL"}; auditor CFO test ${cfo.status === 0 ? "ok" : "FAIL"}`);
+  const numbers = spawnSync("npx", ["tsx", "scripts/test-numbers.ts"], { cwd: ROOT, encoding: "utf8" });
+  const grounding = spawnSync("npx", ["tsx", "scripts/test-grounding.ts"], { cwd: ROOT, encoding: "utf8" });
+  const ok = tscW.status === 0 && tscA.status === 0 && cfo.status === 0 && numbers.status === 0 && grounding.status === 0;
+  card.notes.push(`Typecheck worker ${tscW.status === 0 ? "ok" : "FAIL"} frontend ${tscA.status === 0 ? "ok" : "FAIL"}; auditor CFO ${cfo.status === 0 ? "ok" : "FAIL"}; numbers ${numbers.status === 0 ? "ok" : "FAIL"}; grounding ${grounding.status === 0 ? "ok" : "FAIL"}`);
   if (!ok) {
-    card.remaining.push(`Typecheck/CFO test failed:\n${(tscW.stdout + tscW.stderr + tscA.stdout + tscA.stderr + cfo.stdout + cfo.stderr).slice(0, 800)}`);
+    card.remaining.push(`Typecheck/unit tests failed:\n${(tscW.stdout + tscW.stderr + tscA.stdout + tscA.stderr + cfo.stdout + cfo.stderr + numbers.stdout + numbers.stderr + grounding.stdout + grounding.stderr).slice(0, 1200)}`);
   }
   return ok;
 }
