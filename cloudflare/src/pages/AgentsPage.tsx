@@ -504,34 +504,34 @@ function ActionQueue({ rows, onDecide }: { rows: ActionRow[]; onDecide: (id: str
   if (!rows.length) return <p className="text-sm text-muted">No queued actions yet. Run now to seed recommendations.</p>;
   return (
     <div className="max-h-96 overflow-auto">
-      <table className="min-w-full text-left text-xs">
+      <table className="min-w-[40rem] w-full text-left text-xs">
         <thead className="text-[11px] uppercase tracking-wide text-muted">
           <tr>
-            <th className="py-1">Action</th>
-            <th className="py-1">Amount</th>
-            <th className="py-1">Status</th>
-            <th className="py-1"><span className="sr-only">Decide</span></th>
+            <th className="py-2 pr-4 font-semibold">Action</th>
+            <th className="whitespace-nowrap py-2 px-4 font-semibold">Amount</th>
+            <th className="whitespace-nowrap py-2 px-4 font-semibold">Status</th>
+            <th className="whitespace-nowrap py-2 pl-4 pr-2 text-right font-semibold">Decide</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
             <tr key={r.action_id} className="border-t border-line">
-              <td className="py-1.5">
+              <td className="py-1.5 pr-4">
                 <div className="font-semibold uppercase text-accent">{r.action}</div>
                 <div className="line-clamp-2 text-muted">{r.rationale}</div>
                 {r.exception_id && <div className="text-[11px] text-muted">{r.exception_id}</div>}
               </td>
-              <td className="py-1.5 tabular-nums text-danger">{inr(r.amount, true)}</td>
-              <td className="py-1.5 capitalize">{r.status}</td>
-              <td className="py-1.5 text-right">
+              <td className="whitespace-nowrap py-1.5 px-4 tabular-nums text-danger">{inr(r.amount, true)}</td>
+              <td className="whitespace-nowrap py-1.5 px-4 capitalize">{r.status}</td>
+              <td className="whitespace-nowrap py-1.5 pl-4 pr-2 text-right">
                 {r.status === "proposed" && canApprove({ action: r.action, exceptionId: r.exception_id, amount: r.amount }) && (
-                  <div className="flex justify-end gap-1">
-                    <Button size="sm" variant="success" onClick={() => onDecide(r.action_id, "approved")}>Approve</Button>
-                    <Button size="sm" variant="danger" onClick={() => onDecide(r.action_id, "rejected")}>Reject</Button>
+                  <div className="flex flex-nowrap justify-end gap-1">
+                    <Button size="sm" variant="success" className="shrink-0" onClick={() => onDecide(r.action_id, "approved")}>Approve</Button>
+                    <Button size="sm" variant="danger" className="shrink-0" onClick={() => onDecide(r.action_id, "rejected")}>Reject</Button>
                   </div>
                 )}
                 {r.status === "approved" && canApprove({ action: r.action, exceptionId: r.exception_id, amount: r.amount }) && (
-                  <Button size="sm" variant="outline" onClick={() => onDecide(r.action_id, "done")}>Mark done</Button>
+                  <Button size="sm" variant="outline" className="shrink-0" onClick={() => onDecide(r.action_id, "done")}>Mark done</Button>
                 )}
               </td>
             </tr>

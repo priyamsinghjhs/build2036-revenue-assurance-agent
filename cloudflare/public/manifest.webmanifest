@@ -1,0 +1,15 @@
+{
+  "name": "Kosha Kshema Revenue Assurance",
+  "short_name": "Kosha Kshema",
+  "description": "Kosha Kshema Revenue Assurance — designed to prevent revenue leakage. Executive dashboard for a payment acquirer. Synthetic October 2026 book.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0B2A5B",
+  "theme_color": "#0B2A5B",
+  "icons": [
+    { "src": "/favicon-32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/favicon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/logo-mark.png", "sizes": "256x256", "type": "image/png" }
+  ]
+}

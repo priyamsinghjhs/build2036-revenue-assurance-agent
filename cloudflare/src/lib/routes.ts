@@ -85,5 +85,9 @@ export const TITLES: Record<string, string> = {
   "/open-data": "Open data sources",
   "/settings": "Settings",
   "/settings/data-sources": "Data sources",
+  "/settings/users": "Users",
   "/false-declines": "False declines",
+  "/recovery": "Recovery tracker",
+  "/recon-rules": "Recon rules",
+  "/login": "Sign in",
 };
