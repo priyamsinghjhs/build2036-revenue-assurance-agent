@@ -101,6 +101,9 @@ export const api = {
   routing: () => request<RoutingPayload>("/api/routing"),
   simulateRouting: () => request<RoutingPayload>("/api/routing/simulate", { method: "POST", body: "{}" }),
   models: () => request<ModelsOverview>("/api/models"),
+  openData: () => request<OpenDataPayload>("/api/open-data"),
+  evidence: (exceptionId: string) => request<Record<string, unknown>>(`/api/agents/evidence?exception_id=${encodeURIComponent(exceptionId)}`),
+
   model: (id: string) => request<ModelDetail>(`/api/models/${encodeURIComponent(id)}`),
   predict: (model_id: string, features: Record<string, number>) =>
     request<ModelPredict>("/api/models/predict", { method: "POST", body: JSON.stringify({ model_id, features }) }),
@@ -689,4 +692,34 @@ export type ModelPredict = {
   check: boolean;
   top: { feature: string; value: number; shap: number }[];
   shap: { feature: string; value: number; shap: number }[];
+};
+
+
+export type OpenDataPayload = {
+  synthetic: boolean;
+  note: string;
+  datasets: {
+    dataset_id: string;
+    title: string;
+    source_name: string;
+    source_url?: string | null;
+    license: string;
+    license_url?: string | null;
+    attribution: string;
+    notes?: string | null;
+    row_count?: number | null;
+    bytes_estimate?: number | null;
+    loaded_at?: string | null;
+  }[];
+  guard: { book_leakage?: number; exception_count?: number; tabformer_rows?: number; aml_edges?: number } | null;
+  figures: {
+    usdinr: { day: string; rate: number } | null;
+    mcc: number;
+    iso4217: number;
+    ifsc_banks: number;
+    rbi_psi: number;
+    tabformer: { n: number; fraud: number; usd: number; inr: number };
+    aml: { edges: number; laundering: number; scores?: { n: number; mean_score?: number; mean_labelled?: number; mean_unlabelled?: number } };
+    db_size: { bytes: number; pretty: string } | null;
+  };
 };

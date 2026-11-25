@@ -13,6 +13,41 @@ import { normalizeAmount, normalizeConfidence } from "../../shared/numbers";
 const STEPS = ["investigator", "action", "auditor"] as const;
 type StepId = (typeof STEPS)[number];
 
+
+async function consumeInvestigateSse(
+  body: Record<string, unknown>,
+  onEvent: (event: string, data: Record<string, unknown>) => void,
+): Promise<boolean> {
+  const res = await fetch("/api/agents/investigate", {
+    method: "POST",
+    headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const ct = res.headers.get("content-type") || "";
+  if (!res.ok || !res.body || !ct.includes("text/event-stream")) return false;
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop() ?? "";
+    for (const block of parts) {
+      let ev = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) ev = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+      }
+      if (!dataLines.length) continue;
+      onEvent(ev, JSON.parse(dataLines.join("\n")) as Record<string, unknown>);
+    }
+  }
+  return true;
+}
+
 function stepComplete(id: StepId, out?: Record<string, unknown>) {
   if (!out) return false;
   if (id === "auditor") return Array.isArray(out.checks) && (out.checks as unknown[]).length === 6;
@@ -57,6 +92,7 @@ export default function InvestigatePage() {
       .exception(exceptionId)
       .then((r) => setRow(r.exception))
       .catch((e) => setError(publicErrorMessage(e, "Couldn't load this exception. Please try another.")));
+    api.evidence(exceptionId).catch(() => undefined);
     api
       .latest(`exception:${exceptionId}`)
       .then((r) => {
@@ -84,6 +120,40 @@ export default function InvestigatePage() {
       const next: Record<string, Record<string, unknown>> = resume ? { ...outputs } : {};
       if (!resume) setOutputs({});
       let id = resume ? runId : "";
+      const canStream = !resume || !STEPS.some((s) => stepComplete(s, next[s]));
+      if (canStream) {
+        let streamFailed = "";
+        const streamed = await consumeInvestigateSse(
+          {
+            exception_id: row.exception_id,
+            domain: row.area,
+            run_id: id || undefined,
+          },
+          (event, data) => {
+            if (event === "step") {
+              const agentId = String(data.agent_id) as StepId;
+              current = agentId;
+              setStep(agentId);
+              next[agentId] = (data.output ?? {}) as Record<string, unknown>;
+              setOutputs({ ...next });
+            } else if (event === "done") {
+              const rid = String(data.run_id ?? id);
+              id = rid;
+              setRunId(rid);
+            } else if (event === "error") {
+              streamFailed = String(data.message ?? "The investigation could not be completed.");
+            }
+          },
+        );
+        if (streamed) {
+          if (streamFailed) throw new Error(streamFailed);
+          if (!stepComplete("auditor", next.auditor)) {
+            throw new Error("The auditor returned an incomplete result. You can retry this step.");
+          }
+          setStep("");
+          return;
+        }
+      }
       if (!id) {
         const started = await api.startRun({ scope: `exception:${row.exception_id}`, domain: row.area });
         id = started.run_id;

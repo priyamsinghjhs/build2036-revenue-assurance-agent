@@ -43,6 +43,8 @@ import {
 import { listIngestion, persistIngestion } from "./ingest";
 import { getModel, modelDetail, modelsOverview, predictFeatures } from "./ml/registry";
 import { ASK_VIEWS, SUGGESTED_QUESTIONS } from "./askTemplates";
+import { prefetchEvidence, runInvestigation, sseResponse } from "./investigateFlow";
+import { openDataOverview } from "./openData";
 import { decideAuditorSuggestion, listSuggestionDecisions, type AuditSuggestion } from "./auditor";
 import { publicErrorMessage } from "../shared/errors";
 
@@ -216,6 +218,36 @@ app.post("/api/agents/complete", async (c) => {
   await completeRun(getDb(c.env), runId);
   return c.json({ ok: true, run_id: runId, status: "completed" });
 });
+
+app.get("/api/agents/evidence", async (c) => {
+  const exceptionId = c.req.query("exception_id") || "";
+  if (!exceptionId) return c.json({ error: "exception_id is required" }, 400);
+  return c.json(await prefetchEvidence(c.env, exceptionId));
+});
+
+app.post("/api/agents/investigate", async (c) => {
+  const body = await readJson(c);
+  const exceptionId = requiredString(body, "exception_id");
+  const domain = optionalString(body, "domain") || undefined;
+  const runId = optionalString(body, "run_id") || undefined;
+  const mode = optionalString(body, "mode") === "deterministic" ? "deterministic" as const : undefined;
+  const accept = c.req.header("accept") || "";
+  if (accept.includes("text/event-stream")) {
+    return sseResponse(async (send) => {
+      await runInvestigation(c.env, {
+        exceptionId,
+        domain,
+        runId,
+        mode,
+        onEvent: (ev) => send(ev.type, ev),
+      });
+    });
+  }
+  const result = await runInvestigation(c.env, { exceptionId, domain, runId, mode });
+  return c.json(result);
+});
+
+app.get("/api/open-data", async (c) => c.json(await openDataOverview(getDb(c.env))));
 
 // Legacy settlement + 5-agent endpoints (still used if a settlement is investigated)
 app.get("/api/settlements", async (c) => {

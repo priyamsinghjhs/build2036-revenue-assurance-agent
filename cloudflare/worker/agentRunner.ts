@@ -1,4 +1,5 @@
 import { complete, classifyAIError, DEFAULT_AI_TIMEOUT_MS } from "./llm";
+import { compactContext, NARRATIVE_MAX_TOKENS } from "./compact";
 import {
   AGENT_ROSTER,
   type AgentId,
@@ -63,6 +64,32 @@ function safeParse(s: string): unknown {
   }
 }
 
+const EVIDENCE_TTL_MS = 60_000;
+const evidenceCache = new Map<string, { at: number; payload: Record<string, unknown> }>();
+
+export async function getCachedExceptionInput(env: Env, exceptionId: string): Promise<{ input: Record<string, unknown>; cache_hit: boolean; neon_ms: number }> {
+  const hit = evidenceCache.get(exceptionId);
+  if (hit && Date.now() - hit.at < EVIDENCE_TTL_MS) {
+    return { input: hit.payload, cache_hit: true, neon_ms: 0 };
+  }
+  const db = getDb(env);
+  const t0 = Date.now();
+  const ex = await getException(db, exceptionId);
+  const { graphTools } = await import("./intel");
+  const [graph, policy] = await Promise.all([
+    graphTools(db, { merchant_id: ex?.merchant_id ?? undefined, exception_id: exceptionId }).catch(() => null),
+    policyText(db, ex?.area ?? "synthetic"),
+  ]);
+  const payload = {
+    task: "Investigate this single exception. Use the attached merchant-to-acquirer path, refund or chargeback rings, and closeness to known-bad entities as evidence. Do not invent links. Write for a human reviewer: no internal tool names or snake_case field names. If a cause is not proven by the facts, label it a hypothesis.",
+    exception: ex,
+    network_links: graph,
+    policy,
+  };
+  evidenceCache.set(exceptionId, { at: Date.now(), payload });
+  return { input: payload, cache_hit: false, neon_ms: Date.now() - t0 };
+}
+
 export async function buildInput(env: Env, agentId: AgentId, scope: string, domain?: string, exceptionId?: string) {
   const db = getDb(env);
   if (agentId === "orchestrator") {
@@ -110,10 +137,12 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
       contract_extract: ["contracts"],
     };
     const areas = map[agentId] ?? (domain ? [domain as AreaId] : []);
-    const summaries = [];
-    for (const a of areas) summaries.push(await domainSummaryForAgent(db, a));
     const topic = areas[0] === "bank_trs" ? "bank_trs" : areas[0] === "gateway" || areas[0] === "network" ? "fees" : areas[0] ?? "synthetic";
-    return { task: "Interpret these SQL reconciliation summaries. Do not recompute totals.", summaries, policy: await policyText(db, topic) };
+    const [summaries, policy] = await Promise.all([
+      Promise.all(areas.map((a) => domainSummaryForAgent(db, a))),
+      policyText(db, topic),
+    ]);
+    return { task: "Interpret these SQL reconciliation summaries. Do not recompute totals.", summaries, policy };
   }
   if (agentId === "gap_detection") {
     const areas = await summarizeAll(db);
@@ -125,10 +154,8 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
     };
   }
   if (exceptionId) {
-    const ex = await getException(db, exceptionId);
-    const { graphTools } = await import("./intel");
-    const graph = await graphTools(db, { merchant_id: ex?.merchant_id ?? undefined, exception_id: exceptionId }).catch(() => null);
-    return { task: "Investigate this single exception. Use the attached merchant-to-acquirer path, refund or chargeback rings, and closeness to known-bad entities as evidence. Do not invent links. Write for a human reviewer: no internal tool names or snake_case field names. If a cause is not proven by the facts, label it a hypothesis.", exception: ex, network_links: graph, policy: await policyText(db, ex?.area ?? "synthetic") };
+    const cached = await getCachedExceptionInput(env, exceptionId);
+    return cached.input;
   }
   const top = await listExceptions(db, domain, 8);
   return {
@@ -273,10 +300,12 @@ export async function runAgentStep(
   env: Env,
   opts: { runId: string; agentId: AgentId; scope: string; domain?: string; exceptionId?: string; mode?: "llm" | "deterministic" },
 ) {
+  const neonStarted = Date.now();
   const input = await buildInput(env, opts.agentId, opts.scope, opts.domain, opts.exceptionId);
   const priors = await priorOutputs(getDb(env), opts.runId);
+  const neon_ms = Date.now() - neonStarted;
   const briefPriors = priors.slice(-4).map((p) => ({ agent: p.agent_id, output: p.output }));
-  const user = JSON.stringify({ input, prior_agents: briefPriors }).slice(0, 6000);
+  const user = compactContext({ input, prior_agents: briefPriors }, 4000, "INPUT");
   const basePrompt = `${systemPrompt(opts.agentId)}\n\nINPUT:\n${user}`;
   let output: Record<string, unknown> = {};
   let grounding = checkGrounding({}, user);
@@ -284,6 +313,7 @@ export async function runAgentStep(
   let prompt = basePrompt;
   const started = Date.now();
   const deadline = started + STEP_BUDGET_MS;
+  let ai_ms = 0;
   if (opts.mode === "deterministic") {
     output = sanitizeAgentOutput(deterministicStepOutput(opts.agentId, input, briefPriors, "requested"));
     if (opts.agentId === "auditor") {
@@ -310,10 +340,13 @@ export async function runAgentStep(
       }
       const timeoutMs = Math.min(DEFAULT_AI_TIMEOUT_MS, Math.max(2000, remaining - 500));
       try {
+        const aiStarted = Date.now();
         const raw = await complete(env.AI, prompt, {
           json: opts.agentId === "auditor",
           timeout_ms: timeoutMs,
+          max_tokens: NARRATIVE_MAX_TOKENS,
         });
+        ai_ms += Date.now() - aiStarted;
         try {
           output = parseJson(raw);
         } catch {
@@ -347,21 +380,33 @@ export async function runAgentStep(
       }
     }
   }
-  const passed = grounding.passed;
-  output.verification = passed ? "grounded" : "unverified";
-  output.faithfulness = Math.round(grounding.faithfulness * 1000) / 1000;
+  let passed = grounding.passed;
   if (!passed) {
-    output.unsupported_claims = grounding.unsupported.map((c) => `${c.kind}:${c.value}`);
+    const unsupported = grounding.unsupported.map((c) => `${c.kind}:${c.value}`);
+    output = sanitizeAgentOutput(deterministicStepOutput(opts.agentId, input, briefPriors, "GroundedNumbers below 1.0"));
     if (opts.agentId === "auditor") {
       output = finalizeAuditorOutput(output, input, briefPriors, grounding);
+      output.source = "deterministic";
       output.verdict = "needs_review";
       output.signoff = "needs_review";
       output = alignCfoToVerdict(output as import("./auditor").AuditorOutput) as Record<string, unknown>;
-      const reason = `Grounding check failed after ${retries} rework(s): ${(output.unsupported_claims as string[]).join(", ")}. Treat as unverified, not as fact.`;
-      output.compliance_notes = `${String(output.compliance_notes ?? "")} ${reason}`.trim();
-      output.rationale = String(output.rationale ?? output.compliance_notes);
     }
+    grounding = checkGrounding(output, user);
+    passed = grounding.passed;
+    output.verification = "deterministic_replacement";
+    output.replaced = true;
+    output.unsupported_claims = unsupported;
+    const reason = `Model narrative was replaced with the deterministic template because GroundedNumbers was below 1.0 after ${retries} rework(s): ${unsupported.join(", ") || "unsupported claims"}.`;
+    if (opts.agentId === "auditor") {
+      output.compliance_notes = `${String(output.compliance_notes ?? "")} ${reason}`.trim();
+    } else if (!output.note) {
+      output.note = reason;
+    }
+  } else {
+    output.verification = "grounded";
   }
+  output.faithfulness = Math.round(grounding.faithfulness * 1000) / 1000;
+  output.timing = { total_ms: Date.now() - started, neon_ms, ai_ms, retries };
   const outputId = crypto.randomUUID();
   const created = new Date().toISOString();
   const db = getDb(env);
@@ -385,7 +430,7 @@ export async function runAgentStep(
         grounding.claims,
         grounding.supported,
         retries,
-        passed ? "grounded" : "unverified",
+        String(output.verification ?? (passed ? "grounded" : "unverified")),
         JSON.stringify(grounding.unsupported),
         created,
       )

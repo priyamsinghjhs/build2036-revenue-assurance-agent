@@ -43,6 +43,27 @@ const DOMAINS = [
 
 type StepStatus = "idle" | "running" | "done" | "cached" | "error";
 
+
+function batchAgentSequence(sequence: string[]): string[][] {
+  const batches: string[][] = [];
+  let i = 0;
+  if (sequence[0] === "orchestrator") {
+    batches.push(["orchestrator"]);
+    i = 1;
+  }
+  const recon: string[] = [];
+  while (i < sequence.length && sequence[i].startsWith("recon_")) {
+    recon.push(sequence[i]);
+    i += 1;
+  }
+  for (let j = 0; j < recon.length; j += 4) batches.push(recon.slice(j, j + 4));
+  while (i < sequence.length) {
+    batches.push([sequence[i]]);
+    i += 1;
+  }
+  return batches;
+}
+
 export default function AgentsPage() {
   const [roster, setRoster] = useState<Roster | null>(null);
   const [latest, setLatest] = useState<LatestRun | null>(null);
@@ -126,18 +147,36 @@ export default function AgentsPage() {
       for (const id of started.sequence) nextStatus[id] = "idle";
       setStatus({ ...nextStatus });
       setOutputs({});
-      for (const agentId of started.sequence) {
-        setActive(agentId);
-        setStatus((s) => ({ ...s, [agentId]: "running" }));
-        const step = await api.step({
-          run_id: started.run_id,
-          agent_id: agentId,
-          scope: domain,
-          domain: domain === "all" ? "" : domain,
+      for (const batch of batchAgentSequence(started.sequence)) {
+        setActive(batch[0] ?? "");
+        setStatus((s) => {
+          const next = { ...s };
+          for (const agentId of batch) next[agentId] = "running";
+          return next;
         });
-        nextOut[agentId] = step.output;
-        setOutputs((o) => ({ ...o, [agentId]: step.output }));
-        setStatus((s) => ({ ...s, [agentId]: "done" }));
+        const steps = await Promise.all(
+          batch.map((agentId) =>
+            api.step({
+              run_id: started.run_id,
+              agent_id: agentId,
+              scope: domain,
+              domain: domain === "all" ? "" : domain,
+            }).then((step) => ({ agentId, step })),
+          ),
+        );
+        for (const { agentId, step } of steps) {
+          nextOut[agentId] = step.output;
+        }
+        setOutputs((o) => {
+          const merged = { ...o };
+          for (const { agentId, step } of steps) merged[agentId] = step.output;
+          return merged;
+        });
+        setStatus((s) => {
+          const next = { ...s };
+          for (const { agentId } of steps) next[agentId] = "done";
+          return next;
+        });
       }
       await api.complete(started.run_id);
       const act = await api.actions();

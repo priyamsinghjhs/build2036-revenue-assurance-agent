@@ -1,10 +1,11 @@
-import { completeRun, runAgentStep, startRun } from "./agentRunner";
+import { completeRun, startRun } from "./agentRunner";
 import { executiveSummary, EXPOSURE_AREAS, type ExecPayload } from "./executive";
 import { complete } from "./llm";
 import { getDb, type AppDb } from "./pg";
 import type { Env } from "./types";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import { investigateAnomaly } from "./intel";
+import { runInvestigation } from "./investigateFlow";
 
 function inr(n: number): string {
   const abs = Math.abs(n);
@@ -103,14 +104,19 @@ export async function seedProposedActions(db: AppDb, runId: string, limit = 8) {
     )
     .bind(limit)
     .all<{ area: string; category: string; ref_id: string; leakage: number; currency: string }>();
+  const ids = (results ?? []).map((row) => `${row.area}:${row.category}:${row.ref_id}`);
+  const existing = new Set<string>();
+  if (ids.length) {
+    const { results: have } = await db
+      .prepare(`SELECT exception_id FROM ra_action_queue WHERE exception_id IN (${ids.map(() => "?").join(",")})`)
+      .bind(...ids)
+      .all<{ exception_id: string }>();
+    for (const r of have ?? []) existing.add(String(r.exception_id));
+  }
   let created = 0;
   for (const row of results ?? []) {
     const exceptionId = `${row.area}:${row.category}:${row.ref_id}`;
-    const existing = await db
-      .prepare("SELECT action_id FROM ra_action_queue WHERE exception_id = ? LIMIT 1")
-      .bind(exceptionId)
-      .first();
-    if (existing) continue;
+    if (existing.has(exceptionId)) continue;
     const action = ACTION_FOR[row.category] ?? "escalate";
     await db
       .prepare(
@@ -188,26 +194,34 @@ export async function upsertNarrative(env: Env, exec: ExecPayload, force: boolea
   return { skipped: false, source };
 }
 
-export async function investigateTop(env: Env, runId: string) {
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  let i = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), Math.max(items.length, 1)) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      out[idx] = await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+export async function investigateTop(env: Env, runId: string, opts: { limit?: number; concurrency?: number } = {}) {
   const db = getDb(env);
-  const top = await db
-    .prepare("SELECT area, category, ref_id, leakage FROM ra_exception_rows ORDER BY leakage DESC LIMIT 1")
-    .first<{ area: string; category: string; ref_id: string; leakage: number }>();
-  if (!top) return { skipped: true };
-  const exceptionId = `${top.area}:${top.category}:${top.ref_id}`;
-  const steps = ["investigator", "action", "auditor"] as const;
-  const outputs: string[] = [];
-  for (const agentId of steps) {
-    await runAgentStep(env, {
-      runId,
-      agentId,
-      scope: `exception:${exceptionId}`,
-      domain: top.area,
-      exceptionId,
-    });
-    outputs.push(agentId);
-  }
-  return { skipped: false, exception_id: exceptionId, leakage: top.leakage, steps: outputs };
+  const cap = Math.max(1, opts.limit ?? 1);
+  const { results } = await db
+    .prepare("SELECT area, category, ref_id, leakage FROM ra_exception_rows ORDER BY leakage DESC LIMIT ?")
+    .bind(cap)
+    .all<{ area: string; category: string; ref_id: string; leakage: number }>();
+  if (!results?.length) return { skipped: true };
+  const concurrency = Math.min(opts.concurrency ?? 2, 3);
+  const cases = await mapLimit(results, concurrency, async (top) => {
+    const exceptionId = `${top.area}:${top.category}:${top.ref_id}`;
+    const inv = await runInvestigation(env, { exceptionId, domain: top.area, runId });
+    return { exception_id: exceptionId, leakage: top.leakage, timing_ms: inv.timing_ms, steps: ["investigator", "action", "auditor"] };
+  });
+  return { skipped: false, cases, concurrency };
 }
 
 export async function runDailyAutomation(env: Env, opts: { force?: boolean; skipLlm?: boolean } = {}) {
@@ -254,7 +268,7 @@ export async function runDailyAutomation(env: Env, opts: { force?: boolean; skip
         const ev = await db
           .prepare("SELECT event_id FROM ra_anomaly_events WHERE status='open' AND investigated_run IS NULL ORDER BY ABS(COALESCE(zscore,0)) DESC LIMIT 1")
           .first<{ event_id: string }>();
-        const work = ev ? investigateAnomaly(env, ev.event_id) : investigateTop(env, run.run_id);
+        const work = ev ? investigateAnomaly(env, ev.event_id) : investigateTop(env, run.run_id, { limit: 3, concurrency: 2 });
         const timeout = new Promise((_, reject) => {
           (globalThis as unknown as { setTimeout: (cb: () => void, ms: number) => void })
             .setTimeout(() => reject(new Error("investigation_timeout")), 45_000);

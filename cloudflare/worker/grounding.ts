@@ -104,7 +104,10 @@ function extractClaims(output: unknown): GroundingClaim[] {
   return claims;
 }
 
-export function checkGrounding(output: unknown, context: unknown, threshold = 0.8): GroundingResult {
+/** GroundedNumbers must be 1.0 — every extracted number/ID/date/entity is in the context. */
+export const GROUNDED_REQUIRED = 1.0;
+
+export function checkGrounding(output: unknown, context: unknown, threshold = GROUNDED_REQUIRED): GroundingResult {
   const ctxStr = typeof context === "string" ? context : JSON.stringify(context);
   const { text, numbers } = tokenizeContext(ctxStr);
   const claims = extractClaims(output);
@@ -122,7 +125,7 @@ export function checkGrounding(output: unknown, context: unknown, threshold = 0.
   const faithfulness = claims.length === 0 ? 1 : supported / claims.length;
   const unsupported = claims.filter((c) => !c.supported);
   const critical = unsupported.filter((c) => c.kind === "id" || c.kind === "number" || c.kind === "entity");
-  const passed = faithfulness >= threshold && critical.length === 0;
+  const passed = faithfulness >= threshold && unsupported.length === 0 && critical.length === 0;
   return { claims: claims.length, supported, faithfulness, unsupported, passed };
 }
 

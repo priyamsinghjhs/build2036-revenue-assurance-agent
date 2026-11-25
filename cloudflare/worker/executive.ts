@@ -4,6 +4,7 @@ const AS_OF = "2026-11-21";
 
 export type ExecPayload = {
   synthetic: true;
+  timing_ms?: number;
   period: { from: string; to: string; as_of: string; label: string };
   kpis: {
     revenue: number;
@@ -72,41 +73,34 @@ export const EXPOSURE_AREAS = ["aml", "network_risk", "kyc", "success", "interfa
 export const BOOK_LEAKAGE_SQL = "area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')";
 
 export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
-  const [kpi] = (
-    await db.prepare("SELECT * FROM ra_kpi_summary WHERE id = 1").all<Record<string, unknown>>()
-  ).results ?? [];
-  const [flow] = (
-    await db
-      .prepare("SELECT capture, gateway_fees, scheme_gross, scheme_net, bank, payout FROM ra_money_flow WHERE id = 1")
-      .all<Record<string, number>>()
-  ).results ?? [];
-  const [rec] = (
-    await db.prepare("SELECT COALESCE(SUM(recovered),0)::float AS recovered FROM ra_chargebacks").all<{ recovered: number }>()
-  ).results ?? [];
-  const [wo] = (
-    await db.prepare("SELECT COALESCE(SUM(amount),0)::float AS written_off FROM ra_writeoffs").all<{ written_off: number }>()
-  ).results ?? [];
-  const { results: areasAll } = await db
-    .prepare(
-      "SELECT area, label, match_rate, leakage, exception_count AS exceptions FROM ra_area_summary ORDER BY leakage DESC",
-    )
-    .all<{ area: string; label: string; match_rate: number; leakage: number; exceptions: number }>();
-  const areas = (areasAll ?? []).filter((a) => !EXPOSURE_AREAS.includes(a.area as (typeof EXPOSURE_AREAS)[number]));
-  const { results: cats } = await db
-    .prepare(
-      `SELECT area, category, n, leakage FROM ra_leakage_category WHERE ${BOOK_LEAKAGE_SQL} ORDER BY leakage DESC LIMIT 5`,
-    )
-    .all<{ area: string; category: string; n: number; leakage: number }>();
-  const { results: exposureCats } = await db
-    .prepare(
-      `SELECT area, category, n, leakage FROM ra_leakage_category WHERE area IN ('aml','network_risk','kyc','success','interfaces','anomalies','files') ORDER BY leakage DESC LIMIT 5`,
-    )
-    .all<{ area: string; category: string; n: number; leakage: number }>();
-  const { results: trend } = await db
-    .prepare("SELECT day, leakage, n FROM ra_leakage_trend ORDER BY day")
-    .all<{ day: string; leakage: number; n: number }>();
-  const { results: ageingRaw } = await db
-    .prepare(
+  const t0 = Date.now();
+  const [
+    kpiRes,
+    flowRes,
+    recRes,
+    woRes,
+    areasRes,
+    catsRes,
+    exposureRes,
+    trendRes,
+    ageingRes,
+    actionRes,
+    briefRes,
+    gov,
+    intel,
+    ml,
+    reviews,
+    ev,
+  ] = await Promise.all([
+    db.prepare("SELECT * FROM ra_kpi_summary WHERE id = 1").all<Record<string, unknown>>(),
+    db.prepare("SELECT capture, gateway_fees, scheme_gross, scheme_net, bank, payout FROM ra_money_flow WHERE id = 1").all<Record<string, number>>(),
+    db.prepare("SELECT COALESCE(SUM(recovered),0)::float AS recovered FROM ra_chargebacks").all<{ recovered: number }>(),
+    db.prepare("SELECT COALESCE(SUM(amount),0)::float AS written_off FROM ra_writeoffs").all<{ written_off: number }>(),
+    db.prepare("SELECT area, label, match_rate, leakage, exception_count AS exceptions FROM ra_area_summary ORDER BY leakage DESC").all<{ area: string; label: string; match_rate: number; leakage: number; exceptions: number }>(),
+    db.prepare(`SELECT area, category, n, leakage FROM ra_leakage_category WHERE ${BOOK_LEAKAGE_SQL} ORDER BY leakage DESC LIMIT 5`).all<{ area: string; category: string; n: number; leakage: number }>(),
+    db.prepare(`SELECT area, category, n, leakage FROM ra_leakage_category WHERE area IN ('aml','network_risk','kyc','success','interfaces','anomalies','files') ORDER BY leakage DESC LIMIT 5`).all<{ area: string; category: string; n: number; leakage: number }>(),
+    db.prepare("SELECT day, leakage, n FROM ra_leakage_trend ORDER BY day").all<{ day: string; leakage: number; n: number }>(),
+    db.prepare(
       `SELECT bucket, COUNT(*)::int AS n, COALESCE(SUM(leakage),0)::float AS leakage
        FROM (
          SELECT CASE
@@ -121,20 +115,28 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
          WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')
        ) a
        GROUP BY bucket`,
-    )
-    .all<{ bucket: string; n: number; leakage: number }>();
-  const { results: actionAgg } = await db
-    .prepare(
-      "SELECT status, COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS amount FROM ra_action_queue GROUP BY status",
-    )
-    .all<{ status: string; n: number; amount: number }>();
-  const [brief] = (
-    await db.prepare("SELECT bullets, source, generated_at FROM ra_exec_brief WHERE id = 1").all<{
-      bullets: unknown;
-      source: string;
-      generated_at: string;
-    }>()
-  ).results ?? [];
+    ).all<{ bucket: string; n: number; leakage: number }>(),
+    db.prepare("SELECT status, COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS amount FROM ra_action_queue GROUP BY status").all<{ status: string; n: number; amount: number }>(),
+    db.prepare("SELECT bullets, source, generated_at FROM ra_exec_brief WHERE id = 1").all<{ bullets: unknown; source: string; generated_at: string }>(),
+    db.prepare("SELECT * FROM ra_governance_kpi WHERE id = 1").first<Record<string, unknown>>(),
+    db.prepare("SELECT * FROM ra_intel_kpi WHERE id = 1").first<Record<string, unknown>>(),
+    db.prepare("SELECT * FROM ra_ml_kpi WHERE id = 1").first<Record<string, unknown>>(),
+    db.prepare(`SELECT COUNT(*)::int AS n FROM (SELECT DISTINCT exception_id FROM v_ra_review_queue WHERE review_status='pending') q`).first<{ n: number }>(),
+    db.prepare(`SELECT COALESCE(AVG(faithfulness),0) AS faith, COUNT(*) FILTER (WHERE verification='unverified')::int AS unverified FROM ra_eval_scores`).first<{ faith: number; unverified: number }>().catch(() => ({ faith: 0, unverified: 0 })),
+  ]);
+  const [kpi] = kpiRes.results ?? [];
+  const [flow] = flowRes.results ?? [];
+  const [rec] = recRes.results ?? [];
+  const [wo] = woRes.results ?? [];
+  const areasAll = areasRes.results;
+  const areas = (areasAll ?? []).filter((a) => !EXPOSURE_AREAS.includes(a.area as (typeof EXPOSURE_AREAS)[number]));
+  const cats = catsRes.results;
+  const exposureCats = exposureRes.results;
+  const trend = trendRes.results;
+  const ageingRaw = ageingRes.results;
+  const actionAgg = actionRes.results;
+  const [brief] = briefRes.results ?? [];
+  const evals = ev ?? { faith: 0, unverified: 0 };
 
   const revenue = Number(flow?.capture ?? 0);
   const leakage = Number(kpi?.total_leakage ?? 0);
@@ -168,16 +170,6 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
     .map((bucket) => ageingRaw?.find((r) => r.bucket === bucket) ?? { bucket, n: 0, leakage: 0 })
     .filter((r) => r.n > 0 || r.bucket !== "unknown");
 
-  const gov = await db.prepare("SELECT * FROM ra_governance_kpi WHERE id = 1").first<Record<string, unknown>>();
-  const intel = await db.prepare("SELECT * FROM ra_intel_kpi WHERE id = 1").first<Record<string, unknown>>();
-  const ml = await db.prepare("SELECT * FROM ra_ml_kpi WHERE id = 1").first<Record<string, unknown>>();
-  const reviews = await db.prepare(`SELECT COUNT(*)::int AS n FROM (SELECT DISTINCT exception_id FROM v_ra_review_queue WHERE review_status='pending') q`).first<{ n: number }>();
-  let evals: { faith: number; unverified: number } = { faith: 0, unverified: 0 };
-  try {
-    const ev = await db.prepare(`SELECT COALESCE(AVG(faithfulness),0) AS faith, COUNT(*) FILTER (WHERE verification='unverified')::int AS unverified FROM ra_eval_scores`).first<{ faith: number; unverified: number }>();
-    if (ev) evals = ev;
-  } catch { /* ra_eval_scores may be absent on a stale schema */ }
-
   let bullets: string[] = [];
   if (brief?.bullets) {
     bullets = Array.isArray(brief.bullets) ? (brief.bullets as string[]) : [];
@@ -185,6 +177,7 @@ export async function executiveSummary(db: AppDb): Promise<ExecPayload> {
 
   return {
     synthetic: true,
+    timing_ms: Date.now() - t0,
     period: { from: "2026-10-01", to: "2026-10-31", as_of: AS_OF, label: "October 2026" },
     kpis: {
       revenue,
