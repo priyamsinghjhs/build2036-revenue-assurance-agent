@@ -715,7 +715,7 @@ for (const w of WIDTHS) {
         const answer = document.querySelector('[data-testid="ask-answer"]');
         const table = document.querySelector('[data-testid="ask-table"]');
         const sql = document.querySelector('[data-testid="ask-sql"]');
-        const text = `${answer?.textContent || ""} ${table?.textContent || ""}`;
+        const text = String(answer?.textContent || "") + " " + String(table?.textContent || "");
         return { ok: Boolean(answer && table && /₹/.test(text) && /v_ask_/i.test(sql?.textContent || "")), text: text.slice(0, 240) };
       });
       if (!ask.ok) errors.push({ w, type: "ask", msg: "Ask page missing answer, table, rupee figures or SQL", url: path, detail: ask.text });
