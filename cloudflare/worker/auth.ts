@@ -154,6 +154,8 @@ async function requestUsesWorkersAi(c: AuthCtx, path: string): Promise<boolean> 
   if (skip) return false;
   // Recon agents narrate from a SQL template unless mode=llm, so they spend no neurons.
   if (path === "/api/agents/step" && String(body.agent_id || "").startsWith("recon_") && body.mode !== "llm") return false;
+  // A background job only calls Workers AI when narrative agents are included.
+  if (/^\/api\/recon\/jobs\/?$/.test(path) && body.include_narrative === false) return false;
   if (path === "/api/ask" || path === "/api/ask/") {
     const q = String(body.question || "").trim();
     if (!q || isOutOfScopeQuestion(q)) return false;

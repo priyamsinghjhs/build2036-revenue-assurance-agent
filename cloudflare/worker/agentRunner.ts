@@ -1,3 +1,4 @@
+import { UPSERT_PROPOSED_ACTION_SQL, dedupeActions } from "../shared/actionQueue";
 import { complete, classifyAIError, DEFAULT_AI_TIMEOUT_MS } from "./llm";
 import { compactContext, NARRATIVE_MAX_TOKENS } from "./compact";
 import {
@@ -315,7 +316,7 @@ function deterministicStepOutput(
   };
 }
 
-type StepOpts = { runId: string; agentId: AgentId; scope: string; domain?: string; exceptionId?: string; mode?: "llm" | "deterministic" };
+type StepOpts = { runId: string; agentId: AgentId; scope: string; domain?: string; exceptionId?: string; mode?: "llm" | "deterministic"; /** Cap on one Workers AI call (background jobs). */ aiTimeoutMs?: number };
 
 async function insertEvalScore(
   db: AppDb,
@@ -370,16 +371,37 @@ async function runReconTemplateStep(env: Env, opts: StepOpts, started: number) {
   output = output as Record<string, unknown>;
   const outputId = crypto.randomUUID();
   const created = new Date().toISOString();
-  await Promise.all([
-    db
-      .prepare("INSERT INTO ra_agent_outputs (output_id, run_id, agent_id, domain, output_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .bind(outputId, opts.runId, opts.agentId, opts.domain ?? null, JSON.stringify(output), created)
-      .run(),
-    insertEvalScore(db, {
+  // Output row and eval score in ONE round-trip (one subrequest), so a chunk can run more steps.
+  try {
+    await db
+      .prepare(
+        `WITH o AS (
+           INSERT INTO ra_agent_outputs (output_id, run_id, agent_id, domain, output_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?) RETURNING output_id
+         )
+         INSERT INTO ra_eval_scores (eval_id, run_id, output_id, agent_id, faithfulness, claims, supported, retries, verification, unsupported, created_at, latency_ms)
+         SELECT ?::text, ?::text, o.output_id, ?::text, ?::numeric, ?::int, ?::int, 0, ?::text, ?::jsonb, ?::timestamptz, ?::int FROM o`,
+      )
+      .bind(
+        outputId, opts.runId, opts.agentId, opts.domain ?? null, JSON.stringify(output), created,
+        crypto.randomUUID(), opts.runId, opts.agentId, grounding.faithfulness, grounding.claims, grounding.supported,
+        String(output.verification), JSON.stringify(grounding.unsupported), created, total_ms,
+      )
+      .run();
+  } catch {
+    // Stale schema fallback: the two writes separately (eval score is best-effort).
+    const exists = await db.prepare("SELECT 1 AS x FROM ra_agent_outputs WHERE output_id = ?").bind(outputId).first().catch(() => null);
+    if (!exists) {
+      await db
+        .prepare("INSERT INTO ra_agent_outputs (output_id, run_id, agent_id, domain, output_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(outputId, opts.runId, opts.agentId, opts.domain ?? null, JSON.stringify(output), created)
+        .run();
+    }
+    await insertEvalScore(db, {
       runId: opts.runId, outputId, agentId: opts.agentId, grounding, retries: 0,
       verification: String(output.verification), created, latencyMs: total_ms,
-    }),
-  ]);
+    });
+  }
   return { output_id: outputId, agent_id: opts.agentId, output, created_at: created };
 }
 
@@ -430,7 +452,7 @@ export async function runAgentStep(
         }
         break;
       }
-      const timeoutMs = Math.min(DEFAULT_AI_TIMEOUT_MS, Math.max(2000, remaining - 500));
+      const timeoutMs = Math.min(opts.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_TIMEOUT_MS, Math.max(2000, remaining - 500));
       try {
         const aiStarted = Date.now();
         const raw = await complete(env.AI, prompt, {
@@ -560,14 +582,18 @@ export async function runAgentStep(
   if (opts.agentId === "action") {
     const actions = Array.isArray(output.actions) ? (output.actions as Record<string, unknown>[]) : [];
     for (const act of actions) {
-      await getDb(env).prepare(
-        `INSERT INTO ra_action_queue (action_id, run_id, exception_id, action, amount, currency, confidence, rationale, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?)`,
-      )
+      // Key the proposal to an exception: the step's own, or a target that is an exception id.
+      const target = typeof act.target === "string" && /^[a-z_]+:[a-z0-9_]+:.+/.test(act.target) ? act.target : null;
+      const exceptionKey = opts.exceptionId ?? target;
+      // A deterministic placeholder with no exception ("escalate this exception", ₹0) is not actionable;
+      // queueing it on every Run-all only filled the Action queue with duplicates.
+      if (!exceptionKey && String(output.source ?? "") === "deterministic") continue;
+      // Upsert: one pending proposal per (exception, action) across repeated runs.
+      await getDb(env).prepare(UPSERT_PROPOSED_ACTION_SQL)
         .bind(
           crypto.randomUUID(),
           opts.runId,
-          opts.exceptionId ?? null,
+          exceptionKey,
           String(act.type ?? "escalate"),
           normalizeAmount(act.amount),
           String(act.currency ?? "INR"),
@@ -611,9 +637,9 @@ export async function latestRun(db: AppDb, scope?: string) {
     .bind(run.run_id)
     .all<{ agent_id: string; domain: string | null; output_json: string; created_at: string }>();
   const { results: actions } = await db
-    .prepare("SELECT * FROM ra_action_queue WHERE run_id = ? ORDER BY created_at")
+    .prepare("SELECT * FROM ra_action_queue WHERE run_id = ? AND status <> 'superseded' ORDER BY created_at")
     .bind(run.run_id)
-    .all();
+    .all<Record<string, unknown>>();
   return {
     run,
     outputs: (results ?? []).map((r) => ({
@@ -622,16 +648,23 @@ export async function latestRun(db: AppDb, scope?: string) {
       output: safeParse(r.output_json),
       created_at: r.created_at,
     })),
-    actions: actions ?? [],
+    actions: dedupeActions(actions ?? []),
   };
 }
 
 export async function listActions(db: AppDb, limit = 50) {
   const { results } = await db
-    .prepare("SELECT * FROM ra_action_queue ORDER BY created_at DESC LIMIT ?")
+    .prepare(
+      `SELECT * FROM (
+         SELECT DISTINCT ON (CASE WHEN status = 'proposed' THEN COALESCE(exception_id, rationale) || '|' || action ELSE action_id END) *
+         FROM ra_action_queue
+         WHERE status <> 'superseded'
+         ORDER BY CASE WHEN status = 'proposed' THEN COALESCE(exception_id, rationale) || '|' || action ELSE action_id END, created_at DESC
+       ) d ORDER BY created_at DESC LIMIT ?`,
+    )
     .bind(Math.max(limit, 80))
     .all<Record<string, unknown>>();
-  const rows = results ?? [];
+  const rows = dedupeActions(results ?? []);
   const refs = [...new Set(rows.map((r) => {
     const id = String(r.exception_id ?? "");
     const parts = id.split(":");

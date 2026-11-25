@@ -1,3 +1,4 @@
+import { UPSERT_PROPOSED_ACTION_SQL } from "../shared/actionQueue";
 import { completeRun, startRun } from "./agentRunner";
 import { executiveSummary, type ExecPayload } from "./executive";
 import { deterministicBullets } from "./brief";
@@ -74,7 +75,7 @@ export async function seedProposedActions(db: AppDb, runId: string, limit = 8) {
   const existing = new Set<string>();
   if (ids.length) {
     const { results: have } = await db
-      .prepare(`SELECT exception_id FROM ra_action_queue WHERE exception_id IN (${ids.map(() => "?").join(",")})`)
+      .prepare(`SELECT exception_id FROM ra_action_queue WHERE status <> 'superseded' AND exception_id IN (${ids.map(() => "?").join(",")})`)
       .bind(...ids)
       .all<{ exception_id: string }>();
     for (const r of have ?? []) existing.add(String(r.exception_id));
@@ -85,10 +86,7 @@ export async function seedProposedActions(db: AppDb, runId: string, limit = 8) {
     if (existing.has(exceptionId)) continue;
     const action = ACTION_FOR[row.category] ?? "escalate";
     await db
-      .prepare(
-        `INSERT INTO ra_action_queue (action_id, run_id, exception_id, action, amount, currency, confidence, rationale, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?)`,
-      )
+      .prepare(UPSERT_PROPOSED_ACTION_SQL)
       .bind(
         crypto.randomUUID(),
         runId,

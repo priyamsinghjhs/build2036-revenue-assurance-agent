@@ -13,7 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { Printer } from "lucide-react";
-import { api, type Executive } from "@/api";
+import { api, type Executive, type RecoveryTotals } from "@/api";
 import { CategoryTick, chartMargin, TruncTick } from "@/components/ChartKit";
 import { KpiCard } from "@/components/KpiCard";
 import { ActionNeededCard, ExecHeroTile } from "@/components/ExecHeroTile";
@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CHART, tooltipStyle } from "@/lib/chartTheme";
 import { inr, pct, prettyCat } from "@/lib/format";
+import { inrExact } from "../../shared/money";
 import { areaPath } from "@/lib/routes";
 import { useFilters } from "@/filters";
 import { cn } from "@/lib/utils";
@@ -33,11 +34,13 @@ function heatColor(match: number): string {
 
 export default function ExecutivePage() {
   const [data, setData] = useState<Executive | null>(null);
+  const [recovery, setRecovery] = useState<RecoveryTotals | null>(null);
   const [error, setError] = useState("");
   const { isFiltered } = useFilters();
 
   useEffect(() => {
     api.executive().then(setData).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    api.recoverySummary().then(setRecovery).catch(() => undefined);
   }, []);
 
   if (error) return <p className="text-danger">{error}</p>;
@@ -110,11 +113,13 @@ export default function ExecutivePage() {
         <ExecHeroTile
           label="Revenue processed"
           value={inr(k.revenue, true)}
+          exact={inrExact(k.revenue)}
           hint={`${k.auth_count.toLocaleString("en-IN")} authorizations · match ${pct(k.match_rate)}`}
         />
         <ExecHeroTile
           label="Total leakage"
           value={inr(k.leakage, true)}
+          exact={inrExact(k.leakage)}
           hint={`${pct(k.leakage_pct)} of revenue`}
           tone="leak"
           spark={leakTrend}
@@ -130,7 +135,7 @@ export default function ExecutivePage() {
         <ExecHeroTile
           label="Open exceptions"
           value={k.exception_count.toLocaleString("en-IN")}
-          hint="Book count — exposure areas excluded"
+          hint="Book exceptions, same set as Recovery (excl. AML, KYC, network-risk, anomaly, file & interface exposure)"
           tone="warn"
           spark={exceptionTrend}
           testId="exec-exception-count"
@@ -138,10 +143,32 @@ export default function ExecutivePage() {
         <ExecHeroTile
           label="At risk"
           value={inr(k.recoverable, true)}
+          exact={inrExact(k.recoverable)}
           hint={`Recovered ${inr(k.recovered, true)} · written off ${inr(k.written_off, true)}`}
           tone="warn"
         />
       </div>
+
+      {recovery && (
+        <Card data-testid="exec-recovery-tracker">
+          <CardHeader>
+            <CardTitle>Recovery to closure</CardTitle>
+            <CardDescription>
+              Tracked recoveries against potential (book leakage). SQL over the recovery tracker
+              {recovery.check && !recovery.check.potential_equals_book_leakage ? " — potential does not match book leakage, check the data" : ""}.{" "}
+              <Link to="/recovery" className="text-accent hover:underline">Open tracker</Link>
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard label="Potential" value={inr(recovery.potential, true)} exact={inrExact(recovery.potential)} hint={`${recovery.n ?? 0} book exceptions · same set as Open exceptions`} />
+              <KpiCard label="Recovered (tracked)" value={inr(recovery.recovered, true)} exact={inrExact(recovery.recovered)} hint={`${recovery.closed ?? 0} closed`} tone="ok" />
+              <KpiCard label="Recovery rate" value={pct(recovery.recovery_rate, 2)} hint="recovered ÷ potential" />
+              <KpiCard label="Open" value={inr(recovery.open, true)} exact={inrExact(recovery.open)} hint={`written off ${inr(recovery.written_off, true)} · ${recovery.overdue ?? 0} overdue`} tone="warn" />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2" data-testid="exec-recovery">
         <Card>

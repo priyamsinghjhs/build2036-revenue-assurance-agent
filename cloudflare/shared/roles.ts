@@ -128,6 +128,15 @@ const RULES: Rule[] = [
   { methods: ["POST"], pattern: /^\/api\/actions\/[^/]+\/decision\/?$/, perm: "approve_action" },
   { methods: ["POST"], pattern: /^\/api\/cases\/[^/]+\/?$/, perm: "action_draft" },
   { methods: ["POST"], pattern: /^\/api\/(routing\/simulate|models\/predict|rules\/simulate)\/?$/, perm: "read" },
+  { methods: ["POST"], pattern: /^\/api\/recon\/rules\/proposals\/?$/, perm: "settings" },
+  { methods: ["POST"], pattern: /^\/api\/recon\/rules\/proposals\/[^/]+\/decision\/?$/, perm: "approve_review" },
+  { methods: ["POST"], pattern: /^\/api\/recon\/jobs\/?$/, perm: "recon_run" },
+  // Per-state RBAC (claim, write-off, close, maker-checker) is enforced in shared/recovery.ts.
+  { methods: ["POST"], pattern: /^\/api\/recovery\/items\/[^/]+\/transition\/?$/, perm: "read" },
+  { methods: ["POST"], pattern: /^\/api\/rules\/?$/, perm: "settings" },
+  { methods: ["POST"], pattern: /^\/api\/admin\//, perm: "settings" },
+  { methods: ["POST"], pattern: /^\/api\/actions\/bulk\/?$/, perm: "action_draft" },
+  { methods: ["POST"], pattern: /^\/api\/ingest\/file\/?$/, perm: "settings" },
   { methods: ["GET"], pattern: /^\/api\//, perm: "read" },
 ];
 
@@ -147,7 +156,8 @@ export function isAiLimitedPath(method: string, path: string): boolean {
     /^\/api\/agents\/(investigate|step)\/?$/.test(path) ||
     /^\/api\/anomalies\/investigate\/?$/.test(path) ||
     /^\/api\/legacy\/agents\//.test(path) ||
-    /^\/api\/contracts\/extract\/?$/.test(path)
+    /^\/api\/contracts\/extract\/?$/.test(path) ||
+    /^\/api\/recon\/jobs\/?$/.test(path)
   );
 }
 
@@ -155,6 +165,7 @@ export function navVisible(role: Role, href: string): boolean {
   if (href === "/settings/users") return hasPermission(role, "users");
   if (href.startsWith("/settings")) return hasPermission(role, "settings");
   if (href === "/ingestion") return hasPermission(role, "settings") || hasPermission(role, "recon_run");
+  if (href === "/recon-rules") return hasPermission(role, "settings") || hasPermission(role, "approve_review");
   const area = areaFromPath(href);
   if (area && !areaInRoleScope(role, area)) return false;
   return true;

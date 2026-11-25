@@ -69,6 +69,7 @@ import {
 
 import { withSecurityHeaders } from "./securityHeaders";
 import { registerExtraRoutes } from "./extraRoutes";
+import { sweepReconJobs } from "./reconJobs";
 
 const app = new Hono<{ Bindings: Env; Variables: { user?: AppUser } }>();
 
@@ -790,7 +791,10 @@ function optionalTrail(body: Record<string, unknown>): string[] {
 export type { AgentState, Env };
 async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
   // Await the work so a CPU/time limit cannot drop the job while the log still says 'running'.
-  const work = runDailyAutomation(env, { force: false }).then(() => invalidateMem());
+  const work = runDailyAutomation(env, { force: false })
+    .then(() => invalidateMem())
+    .then(() => sweepReconJobs(env))
+    .then(() => undefined);
   ctx.waitUntil(work);
   await work;
 }

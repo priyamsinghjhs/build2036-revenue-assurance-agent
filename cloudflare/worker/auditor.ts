@@ -4,6 +4,7 @@
  * still come from the agent input; suggestions are proposals only.
  */
 
+import { UPSERT_PROPOSED_ACTION_SQL } from "../shared/actionQueue";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import type { AppDb } from "./pg";
 import type { GroundingResult } from "./grounding";
@@ -821,22 +822,22 @@ export async function decideAuditorSuggestion(
     const actionType = body.suggestion.action === "dispute_draft" || body.suggestion.action === "data_request_draft"
       ? body.suggestion.action
       : body.suggestion.action;
-    await db
-      .prepare(
-        `INSERT INTO ra_action_queue (action_id, run_id, exception_id, action, amount, currency, confidence, rationale, status, created_at)
-         VALUES (?, ?, ?, ?, ?, 'INR', ?, ?, 'proposed', ?)`,
-      )
+    // Idempotent: accepting the same suggestion twice refreshes the one pending proposal.
+    const up = await db
+      .prepare(UPSERT_PROPOSED_ACTION_SQL)
       .bind(
         actionId,
         body.run_id ?? null,
         body.exception_id,
         actionType,
         body.suggestion.expected_recovery,
+        "INR",
         80,
         `${body.suggestion.title}. ${body.suggestion.rationale} Owner: ${body.suggestion.owner_team}. In-app only; not sent externally.`,
         new Date().toISOString(),
       )
-      .run();
+      .first<{ action_id: string }>();
+    if (up?.action_id) actionId = up.action_id;
 
     if (body.suggestion.maps_to === "draft_dispute" || body.suggestion.maps_to === "draft_data_request" || body.suggestion.action.endsWith("_draft")) {
       draftId = crypto.randomUUID();

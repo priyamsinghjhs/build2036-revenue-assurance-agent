@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.app.json --noEmit && vite build",
+    "build": "tsc -p tsconfig.app.json --noEmit && vite build && node scripts/check-bundle.mjs",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler deploy",
     "types": "wrangler types",
@@ -14,7 +14,9 @@
     "test:review-amount": "npx tsx scripts/test-review-amount.ts",
     "test:figures": "npx tsx scripts/test-figure-consistency.ts",
     "test:recon": "npx tsx scripts/test-recon-template.ts && npx tsx scripts/test-grounding.ts && npx tsx scripts/test-ask-templates.ts",
-    "test": "npm run test:format && npm run test:numbers && npm run test:review-amount && npm run test:figures && npm run test:recon"
+    "test": "npm run test:format && npm run test:numbers && npm run test:review-amount && npm run test:figures && npm run test:recon && npm run test:rules && npm run test:ui",
+    "test:rules": "npx tsx scripts/test-recon-config.ts && npx tsx scripts/test-recovery.ts && npx tsx scripts/test-recon-jobs.ts",
+    "test:ui": "npx tsx scripts/test-kpi-format.ts && npx tsx scripts/test-action-dedupe.ts"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

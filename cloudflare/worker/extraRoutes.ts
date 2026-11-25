@@ -9,6 +9,9 @@ import { csrfToken, csrfMiddleware } from "./csrf";
 import { requireUser } from "./auth";
 import { listRules, upsertRule } from "./rules";
 import { handleIngestFile } from "./parsers";
+import { decideRules, getRuleHistory, getRules, proposeRules } from "./reconConfig";
+import { recoveryItem, recoveryList, recoverySummary, recoveryTransition } from "./recovery";
+import { createReconJob, getReconJob, listReconJobs } from "./reconJobs";
 
 type App = Hono<{ Bindings: Env; Variables: { user?: AppUser } }>;
 
@@ -25,6 +28,25 @@ export function registerExtraRoutes(app: App) {
   app.use("/api/admin/*", csrfMiddleware);
   app.use("/api/rules", csrfMiddleware);
   app.use("/api/ingest/file", csrfMiddleware);
+  app.use("/api/recon/*", csrfMiddleware);
+  app.use("/api/recovery/*", csrfMiddleware);
+
+  // Configurable recon rules (versioned, maker-checker, audited).
+  app.get("/api/recon/rules", (c) => getRules(c));
+  app.get("/api/recon/rules/history", (c) => getRuleHistory(c));
+  app.post("/api/recon/rules/proposals", (c) => proposeRules(c));
+  app.post("/api/recon/rules/proposals/:version/decision", (c) => decideRules(c));
+
+  // Background recon jobs (202 + polling; DB job table, ctx.waitUntil, cron sweep).
+  app.post("/api/recon/jobs", (c) => createReconJob(c));
+  app.get("/api/recon/jobs", (c) => listReconJobs(c));
+  app.get("/api/recon/jobs/:id", (c) => getReconJob(c));
+
+  // Recovery tracking to closure.
+  app.get("/api/recovery", (c) => recoveryList(c));
+  app.get("/api/recovery/summary", (c) => recoverySummary(c));
+  app.get("/api/recovery/items/:id", (c) => recoveryItem(c));
+  app.post("/api/recovery/items/:id/transition", (c) => recoveryTransition(c));
 
   app.get("/api/glossary", (c) => handleGlossary(c));
   app.get("/api/exceptions/:id/why", (c) => handleWhy(c));

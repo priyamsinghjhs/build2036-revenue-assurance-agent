@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Sparkline, type SparkPoint } from "@/components/Sparkline";
 import { cn } from "@/lib/utils";
 import { CHART } from "@/lib/chartTheme";
+import { kpiFontSize } from "../../shared/kpiFit";
 
 export function ExecHeroTile({
   label,
@@ -12,9 +13,12 @@ export function ExecHeroTile({
   spark,
   delta,
   testId,
+  exact,
 }: {
   label: string;
   value: string;
+  /** Exact figure shown on hover when `value` is a compact (₹ L / Cr) rendering. */
+  exact?: string;
   hint?: string;
   tone?: "leak" | "ok" | "neutral" | "warn";
   spark?: SparkPoint[];
@@ -30,8 +34,13 @@ export function ExecHeroTile({
         <span className="truncate" title={label}>{label}</span>
       </div>
       <div className="mt-1 flex items-end justify-between gap-2">
-        <div className="min-w-0">
-          <div className={cn("truncate text-2xl font-semibold leading-tight tabular-nums sm:text-3xl", valueColor)} title={value}>
+        <div className="min-w-0 flex-1 [container-type:inline-size]">
+          <div
+            className={cn("whitespace-nowrap font-semibold leading-tight tabular-nums", valueColor)}
+            style={{ fontSize: kpiFontSize(value) }}
+            title={exact && exact !== value ? `${value} = ${exact}` : value}
+            data-kpi-value
+          >
             {value}
           </div>
           {delta && (
@@ -39,10 +48,10 @@ export function ExecHeroTile({
               {delta.display}
             </div>
           )}
-          {hint && <div className="mt-1 truncate text-xs text-muted" title={hint}>{hint}</div>}
+          {hint && <div className="mt-1 break-words text-xs text-muted">{hint}</div>}
         </div>
         {spark && spark.length > 1 && (
-          <div className="w-[42%] max-w-[140px] shrink-0">
+          <div className="w-[36%] max-w-[140px] shrink-0">
             <Sparkline points={spark} color={sparkColor} label={`${label} trend`} />
           </div>
         )}
