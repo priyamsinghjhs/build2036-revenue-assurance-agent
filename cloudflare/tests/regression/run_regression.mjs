@@ -675,6 +675,33 @@ for (const w of WIDTHS) {
     overlaps.push({ path, w, hits });
     const c = await page.evaluate(chartAudit);
     if (c.length) charts.push({ path, w, c });
+    if (path === "/anomalies") {
+      const spark = await page.evaluate(() => {
+        const cards = [...document.querySelectorAll('[data-testid="anomaly-spark-card"]')];
+        const issues = [];
+        if (!cards.length) return { ok: false, issues: ["no sparkline cards"], n: 0 };
+        for (const card of cards) {
+          const title = (card.querySelector('[data-testid="anomaly-spark-title"]')?.textContent || "").trim() || "untitled";
+          const empty = card.querySelector('[data-testid="anomaly-spark-empty"]');
+          if (empty) {
+            if (!/no data/i.test(empty.textContent || "")) issues.push(title + ": empty state missing 'no data'");
+            continue;
+          }
+          const kpis = card.querySelector('[data-testid="anomaly-spark-kpis"]');
+          const text = (kpis?.textContent || "").replace(/\\s+/g, " ");
+          const hasCurrent = /current/i.test(text) && /\\d/.test(text);
+          const hasEwma = /ewma/i.test(text) && /\\d/.test(text);
+          const hasDev = /deviation|\\bz\\b/i.test(text) && /\\d/.test(text);
+          const hasDate = /20\\d{2}-\\d{2}-\\d{2}/.test(text);
+          const hasBand = /expected band/i.test(text) && /\\d/.test(text);
+          if (!hasCurrent || !hasEwma || !hasDev || !hasDate || !hasBand) {
+            issues.push(title + ": missing numeric figures (" + text.slice(0, 160) + ")");
+          }
+        }
+        return { ok: issues.length === 0, issues, n: cards.length };
+      });
+      if (!spark.ok) errors.push({ w, type: "anomaly-spark", msg: (spark.issues || []).join("; ") || "sparkline cards missing figures", url: path, n: spark.n });
+    }
     if (path==="/" && w===1440) {
       await page.getByText("Top leakage drivers").first().scrollIntoViewIfNeeded().catch(()=>{});
       await page.screenshot({ path: OUT+"/v8-regression-executive.png", fullPage: true });
