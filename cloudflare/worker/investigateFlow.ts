@@ -41,19 +41,17 @@ export async function runInvestigation(
   },
 ) {
   const t0 = Date.now();
-  const ev = await prefetchEvidence(env, opts.exceptionId);
-  await opts.onEvent?.({ type: "evidence", cache_hit: ev.cache_hit, exception: ev.exception, timing_ms: ev.timing_ms });
-
   const db = getDb(env);
-  let runId = opts.runId || "";
-  if (!runId) {
-    const started = await startRun(db, `exception:${opts.exceptionId}`);
-    runId = started.run_id;
-  }
+  const [ev, started] = await Promise.all([
+    prefetchEvidence(env, opts.exceptionId),
+    opts.runId ? Promise.resolve(null) : startRun(db, `exception:${opts.exceptionId}`),
+  ]);
+  await opts.onEvent?.({ type: "evidence", cache_hit: ev.cache_hit, exception: ev.exception, timing_ms: ev.timing_ms });
+  const runId = opts.runId || started?.run_id || "";
 
   const outputs: Record<string, Record<string, unknown>> = {};
   const timings: Record<string, unknown> = {};
-  for (const agentId of INVESTIGATE_STEPS) {
+  const runStep = async (agentId: InvestigateStepId) => {
     const step = await runAgentStep(env, {
       runId,
       agentId: agentId as AgentId,
@@ -66,6 +64,14 @@ export async function runInvestigation(
     outputs[agentId] = output;
     timings[agentId] = output.timing ?? null;
     await opts.onEvent?.({ type: "step", agent_id: agentId, output, timing: output.timing });
+  };
+  if (opts.mode === "deterministic") {
+    // Deterministic investigator and action read only the exception facts, not each
+    // other's output, so they run together; the auditor still runs last over both.
+    await Promise.all([runStep("investigator"), runStep("action")]);
+    await runStep("auditor");
+  } else {
+    for (const agentId of INVESTIGATE_STEPS) await runStep(agentId);
   }
   await completeRun(db, runId);
   const timing_ms = Date.now() - t0;

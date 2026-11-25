@@ -311,7 +311,8 @@ export default function AgentsPage() {
                     <th className="pb-2 pr-3 text-right" title="Share of extracted numbers, IDs, dates and entities in the factual output that also appear in the SQL context. Hypotheses are scored separately and are not counted here.">Faithfulness</th>
                     <th className="pb-2 pr-3 text-right" title="1 minus faithfulness on factual claims only. Recommended next steps and labelled hypotheses are not treated as hallucinations.">Hallucination</th>
                     <th className="pb-2 pr-3 text-right" title="How many times the model was asked to rewrite after a grounding failure, before a deterministic replacement.">Reworks</th>
-                    <th className="pb-2 text-right" title="Outputs that could not be grounded in the SQL facts and were sent to the review queue. A timeout now still runs the deterministic grounding check rather than skipping it.">Unverified</th>
+                    <th className="pb-2 pr-3 text-right" title="Outputs that could not be grounded in the SQL facts and were sent to the review queue. A timeout now still runs the deterministic grounding check rather than skipping it.">Unverified</th>
+                    <th className="pb-2 text-right" title="Median server time per agent step, from outputs recorded since step latency was logged.">Median time</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -322,7 +323,8 @@ export default function AgentsPage() {
                       <td className="py-2 pr-3 text-right tabular-nums">{pct(Number(a.faithfulness))}</td>
                       <td className="py-2 pr-3 text-right tabular-nums">{pct(Number(a.hallucination_rate))}</td>
                       <td className="py-2 pr-3 text-right tabular-nums">{a.retries}</td>
-                      <td className="py-2 text-right tabular-nums">{a.unverified}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{a.unverified}</td>
+                      <td className="py-2 text-right tabular-nums">{a.p50_latency_ms != null ? formatMs(Number(a.p50_latency_ms)) : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -398,10 +400,10 @@ function AgentOutput({ output }: { output?: Record<string, unknown> }) {
   const chips = [
     output.risk_level,
     output.match_quality,
-    output.assessment,
     output.signoff,
-    output.root_cause,
   ].filter((v) => typeof v === "string") as string[];
+  const timing = output.timing as { total_ms?: number; llm?: boolean } | undefined;
+  const checks = Array.isArray(output.checks) ? (output.checks as { check: string; passed: boolean; detail: string }[]) : [];
   return (
     <div className="space-y-3 text-sm">
       <div className="flex flex-wrap gap-2">
@@ -414,6 +416,16 @@ function AgentOutput({ output }: { output?: Record<string, unknown> }) {
           </span>
         )}
       </div>
+      {(output.source === "sql_template" || output.verification === "grounded") && (
+        <p className="text-[11px] text-muted">
+          {output.source === "sql_template" ? "Written from SQL figures (no AI model)" : "AI narrative, checked against SQL figures"}
+          {output.verification === "grounded" ? " · every figure cited" : ""}
+          {timing?.total_ms != null ? ` · ${formatMs(timing.total_ms)}` : ""}
+        </p>
+      )}
+      {typeof output.assessment === "string" && <p className="text-ink">{output.assessment}</p>}
+      {typeof output.root_cause === "string" && <p className="text-ink">{output.root_cause}</p>}
+      {typeof output.recommended_focus === "string" && <p className="text-xs text-muted">{output.recommended_focus}</p>}
       {typeof output.cfo_one_liner === "string" && <p className="text-ink">{output.cfo_one_liner}</p>}
       {typeof output.summary === "string" && <p className="text-ink">{output.summary}</p>}
       <KeyList title="Attention" items={asList(output.attention)} />
@@ -423,8 +435,24 @@ function AgentOutput({ output }: { output?: Record<string, unknown> }) {
       <GapList items={output.top_gaps} />
       <GapList items={output.priority_gaps} />
       <ActionList items={output.actions} />
+      {checks.length > 0 && (
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted">Data checks</div>
+          <ul className="mt-1 space-y-0.5 text-xs">
+            {checks.map((c) => (
+              <li key={c.check} className={c.passed ? "text-muted" : "text-danger"}>
+                {c.passed ? "✓" : "✗"} {c.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
+}
+
+function formatMs(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`;
 }
 
 function asList(v: unknown): string[] {
@@ -455,8 +483,9 @@ function GapList({ items }: { items: unknown }) {
         const row = g as Record<string, unknown>;
         return (
           <li key={i} className="rounded-lg bg-slate-50 px-2 py-1">
-            {String(row.category || row.area || "gap")}
-            {row.leakage != null ? ` · ${inr(Number(row.leakage), true)}` : ""}
+            {prettyCat(String(row.category || row.issue || row.area || "gap"))}
+            {row.ref ? ` · ${String(row.ref)}` : ""}
+            {row.leakage != null ? ` · ${inr(Number(row.leakage), true)}` : row.amount != null ? ` · ${inr(Number(row.amount), true)}` : ""}
             {row.why ? ` — ${row.why}` : ""}
           </li>
         );

@@ -1,4 +1,6 @@
 import type { Hono } from "hono";
+import type { AppUser } from "../shared/roles";
+import type { Env } from "./types";
 import { handleWhy } from "./why";
 import { handleGlossary } from "./glossary";
 import { handleBulkAction } from "./bulk";
@@ -8,7 +10,9 @@ import { requireUser } from "./auth";
 import { listRules, upsertRule } from "./rules";
 import { handleIngestFile } from "./parsers";
 
-export function registerExtraRoutes(app: Hono) {
+type App = Hono<{ Bindings: Env; Variables: { user?: AppUser } }>;
+
+export function registerExtraRoutes(app: App) {
   // CSRF token (call once after login)
   app.get("/api/csrf", (c) => {
     const token = csrfToken();

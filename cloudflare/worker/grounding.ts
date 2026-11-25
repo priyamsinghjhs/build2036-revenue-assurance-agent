@@ -30,10 +30,17 @@ const STOP_IDS = new Set([
   "TREAT", "TREATS", "TREATMENT", "DRAFT",
 ]);
 
+/**
+ * Numbers with Western (1,234,567.89) or Indian (12,34,567.89) digit grouping.
+ * Without the Indian form, "₹9,94,298.01" was read as 9 and 94,298.01 and the
+ * second half was scored as a hallucination.
+ */
+export const NUMBER_RE_SOURCE = String.raw`-?(?:\d{1,2}(?:,\d{2})+,\d{3}|\d+(?:,\d{3})*)(?:\.\d+)?`;
+
 function tokenizeContext(context: string): { text: string; numbers: number[] } {
   const text = context.toUpperCase();
   const numbers: number[] = [];
-  const re = /-?\d+(?:,\d{3})*(?:\.\d+)?/g;
+  const re = new RegExp(NUMBER_RE_SOURCE, "g");
   let m: RegExpExecArray | null;
   while ((m = re.exec(context))) {
     const n = Number(m[0].replace(/,/g, ""));
@@ -75,7 +82,7 @@ function extractClaims(output: unknown): GroundingClaim[] {
     claims.push({ kind, value, supported: false });
   };
 
-  const numRe = /-?\d+(?:,\d{3})*(?:\.\d+)?/g;
+  const numRe = new RegExp(NUMBER_RE_SOURCE, "g");
   let m: RegExpExecArray | null;
   while ((m = numRe.exec(text))) {
     const raw = m[0];
@@ -119,6 +126,8 @@ const META_KEYS = new Set([
   "cache_hit", "retries", "source", "verification", "faithfulness",
   "unsupported", "claims", "supported", "error", "model",
   "prompt_tokens", "completion_tokens", "eval_id",
+  // Echoes of an earlier check's rejected claims are a log, not new claims.
+  "unsupported_claims", "post_check_removed", "hypothesis_claims", "hypothesis_faithfulness",
 ]);
 
 /** Advice / hypothesis sentences that start with these tags are not scored as facts. */
@@ -222,7 +231,8 @@ function scoreAgainstContext(output: unknown, ctxStr: string, threshold: number)
   for (const c of claims) {
     if (c.kind === "number") {
       const n = Number(c.value);
-      c.supported = closeTo(n, numbers) || text.includes(c.value.toUpperCase());
+      // Display text writes negatives with a minus sign or as a plain magnitude.
+      c.supported = closeTo(n, numbers) || closeTo(-n, numbers) || text.includes(c.value.toUpperCase());
     } else {
       const needle = c.value.toUpperCase().replace(/-/g, "");
       const hay = text.replace(/-/g, "");
