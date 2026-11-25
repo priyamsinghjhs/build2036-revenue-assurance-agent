@@ -19,7 +19,7 @@ export default function SettingsPage() {
               <CardDescription>Connect warehouses, object storage, databases, billing and invoicing systems.</CardDescription>
             </CardHeader>
             <CardContent className="text-sm text-muted">
-              Each connector says honestly whether this Worker can test it over HTTP, or whether it is configuration-only until you add a gateway. Credentials are encrypted server-side and never shown again.
+              Each connector shows an honest badge (Live HTTP, Hyperdrive, Gateway, File, or Planned). Credentials are encrypted server-side and never shown again. This app does not create Hyperdrive configs or Cloudflare Tunnels for you.
             </CardContent>
           </Card>
         </Link>
@@ -31,7 +31,7 @@ export default function SettingsPage() {
             <CardDescription>This deployment is the free Workers plan with Neon over HTTP.</CardDescription>
           </CardHeader>
           <CardContent className="text-sm text-muted">
-            Raw TCP databases (Oracle, Hive, MySQL, MongoDB) need Hyperdrive or a TLS gateway. No paid add-on is enabled here.
+            Hyperdrive (free plan, 100,000 queries/day) can be bound for Postgres and MySQL after you create a config. Oracle, Hive, MongoDB and SFTP need a Cloudflare Tunnel or HTTPS gateway. No Hyperdrive binding or tunnel is configured in this deployment unless you add one.
           </CardContent>
         </Card>
       </div>

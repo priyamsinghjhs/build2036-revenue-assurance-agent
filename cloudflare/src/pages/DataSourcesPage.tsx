@@ -5,24 +5,42 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { publicErrorMessage } from "../../shared/errors";
 
-const CATEGORIES: { id: DataSourceConnector["category"]; label: string }[] = [
+const CATEGORIES: { id: string; label: string }[] = [
   { id: "warehouse", label: "Warehouses" },
   { id: "object_storage", label: "Object storage" },
   { id: "database", label: "Databases" },
   { id: "billing", label: "Billing" },
   { id: "invoicing", label: "Invoicing" },
+  { id: "file_transfer", label: "File transfer" },
+  { id: "card_scheme", label: "Card scheme settlement" },
+  { id: "upi_npci", label: "UPI / NPCI" },
+  { id: "processor", label: "Processors / switch" },
+  { id: "indian_gateway", label: "Indian gateways" },
+  { id: "global_psp", label: "Global PSPs" },
+  { id: "bank_statement", label: "Bank statements" },
+  { id: "disputes", label: "Disputes" },
+  { id: "fraud", label: "Fraud" },
+  { id: "erp", label: "ERP / GL" },
+  { id: "fx", label: "FX" },
+  { id: "streams", label: "Streams" },
+  { id: "custom", label: "Custom" },
 ];
+
+const BADGE: Record<string, { label: string; className: string }> = {
+  http: { label: "Live HTTP", className: "bg-emerald-50 text-emerald-800" },
+  hyperdrive: { label: "Hyperdrive", className: "bg-sky-50 text-sky-800" },
+  gateway: { label: "Gateway", className: "bg-amber-50 text-warning" },
+  file: { label: "File", className: "bg-indigo-50 text-indigo-800" },
+  planned: { label: "Planned", className: "bg-slate-100 text-slate-700" },
+};
 
 const inputClass = "w-full rounded-md border border-line bg-white px-3 py-2 text-sm";
 
-function ModeBadge({ mode }: { mode: "http" | "gateway" }) {
-  return mode === "http" ? (
-    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-800" data-testid="sync-mode-badge">
-      Live HTTP test
-    </span>
-  ) : (
-    <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-warning" data-testid="sync-mode-badge">
-      Config only · needs a gateway
+function ModeBadge({ mode }: { mode: DataSourceConnector["sync_mode"] }) {
+  const badge = BADGE[mode] ?? BADGE.gateway;
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${badge.className}`} data-testid="sync-mode-badge">
+      {badge.label}
     </span>
   );
 }
@@ -34,6 +52,8 @@ export default function DataSourcesPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
   const connectorId = params.connectorId;
   const connectionId = params.connectionId;
 
@@ -201,8 +221,30 @@ export default function DataSourcesPage() {
         </Card>
       )}
 
+      <div className="flex flex-col gap-3" data-testid="catalog-filters">
+        <input
+          className={inputClass}
+          data-testid="catalog-search"
+          placeholder="Search connectors (Visa, SFTP, Hyperdrive, Razorpay…)"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <div className="flex flex-wrap gap-1.5">
+          <button type="button" data-testid="catalog-category-all" className={`rounded-full px-2.5 py-1 text-xs font-medium ${category === "all" ? "bg-navy-900 text-white" : "bg-slate-100 text-ink"}`} onClick={() => setCategory("all")}>All</button>
+          {CATEGORIES.map((cat) => (
+            <button type="button" key={cat.id} data-testid={`catalog-category-${cat.id}`} className={`rounded-full px-2.5 py-1 text-xs font-medium ${category === cat.id ? "bg-navy-900 text-white" : "bg-slate-100 text-ink"}`} onClick={() => setCategory(cat.id)}>{cat.label}</button>
+          ))}
+        </div>
+      </div>
+
       {CATEGORIES.map((cat) => {
-        const items = data.catalog.filter((c) => c.category === cat.id);
+        if (category !== "all" && category !== cat.id) return null;
+        const q = query.trim().toLowerCase();
+        const items = data.catalog.filter((c) => {
+          if (c.category !== cat.id) return false;
+          if (!q) return true;
+          return [c.id, c.title, c.vendor, c.summary, c.honesty, c.sync_mode, c.relay ?? ""].join(" ").toLowerCase().includes(q);
+        });
         if (!items.length) return null;
         return (
           <section key={cat.id} className="space-y-3">
@@ -229,6 +271,14 @@ export default function DataSourcesPage() {
           </section>
         );
       })}
+      {!data.catalog.some((c) => {
+        if (category !== "all" && c.category !== category) return false;
+        const q = query.trim().toLowerCase();
+        if (!q) return true;
+        return [c.id, c.title, c.vendor, c.summary, c.honesty, c.sync_mode].join(" ").toLowerCase().includes(q);
+      }) ? (
+        <p className="text-sm text-muted" data-testid="catalog-empty">No connectors match that search.</p>
+      ) : null}
     </div>
   );
 }
@@ -299,6 +349,22 @@ function ConnectionForm({
         <ModeBadge mode={catalog.sync_mode} />
       </header>
       <p className="text-sm leading-relaxed text-muted" data-testid="connector-honesty">{catalog.honesty}</p>
+
+      {catalog.setup_steps?.length ? (
+        <Card data-testid="relay-setup">
+          <CardHeader>
+            <CardTitle>{catalog.setup_title || "Relay setup"}</CardTitle>
+            <CardDescription>This app does not create a Hyperdrive config or a Cloudflare Tunnel in your account.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ol className="list-decimal space-y-2 pl-5 text-sm leading-relaxed text-muted">
+              {catalog.setup_steps.map((step, i) => (
+                <li key={i}>{step}</li>
+              ))}
+            </ol>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>

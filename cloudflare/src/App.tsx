@@ -233,6 +233,42 @@ function Breadcrumb() {
   );
 }
 
+const AREA_FILTER_SLUGS = new Set([
+  "authorization",
+  "scheme",
+  "bank",
+  "fees",
+  "terminals",
+  "apm",
+  "fx",
+  "pricing",
+  "payouts",
+  "chargebacks",
+  "billing",
+  "invoicing",
+  "cash",
+  "vendors",
+  "gl",
+  "hops",
+  "settlement",
+  "funding",
+  "acquirer",
+  "config",
+  "tax",
+  "kyc",
+  "interfaces",
+  "aml",
+  "success",
+  "false-declines",
+]);
+
+/** True only on Executive and Area pages, which honour merchant/scheme filters. */
+export function pathHonoursFilters(pathname: string): boolean {
+  if (pathname === "/") return true;
+  const slug = pathname.replace(/^\//, "").split("/")[0];
+  return AREA_FILTER_SLUGS.has(slug);
+}
+
 function FilterBar() {
   const { filters, setFilters, options } = useFilters();
   const merchants = [
@@ -244,7 +280,11 @@ function FilterBar() {
     ...(options?.schemes ?? []).map((s) => ({ value: s, label: s })),
   ];
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
+    <div className="space-y-2" data-testid="filter-bar">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted" data-testid="filter-applies-hint">
+        Filters apply to this page
+      </p>
+      <div className="grid gap-3 sm:grid-cols-3">
       <Select
         id="filter-period"
         label="Period"
@@ -266,12 +306,15 @@ function FilterBar() {
         onValueChange={(v) => setFilters({ scheme: v })}
         options={schemes}
       />
+      </div>
     </div>
   );
 }
 
 function Shell() {
   const [open, setOpen] = useState(false);
+  const { pathname } = useLocation();
+  const showFilters = pathHonoursFilters(pathname);
   return (
     <div className="flex min-h-screen">
       <aside className="hidden w-60 shrink-0 bg-navy-900 text-white md:block print:hidden">
@@ -301,9 +344,11 @@ function Shell() {
               Synthetic book
             </span>
           </div>
-          <div className="mx-auto max-w-6xl border-t border-line px-4 py-3 md:px-8">
-            <FilterBar />
-          </div>
+          {showFilters ? (
+            <div className="mx-auto max-w-6xl border-t border-line px-4 py-3 md:px-8">
+              <FilterBar />
+            </div>
+          ) : null}
         </header>
         <main id="main" className="mx-auto max-w-6xl p-4 md:p-8">
           <Routes>

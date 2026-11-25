@@ -746,14 +746,18 @@ export type DataSourceConnector = {
   id: string;
   title: string;
   vendor: string;
-  category: "warehouse" | "object_storage" | "database" | "billing" | "invoicing";
-  sync_mode: "http" | "gateway";
+  category: string;
+  sync_mode: "http" | "hyperdrive" | "gateway" | "file" | "planned";
   summary: string;
   honesty: string;
   docs_url?: string;
   fields: DataSourceField[];
   mapping_targets: string[];
   probe_name: string;
+  relay?: "http" | "hyperdrive" | "tunnel" | "none";
+  setup_title?: string;
+  setup_steps?: string[];
+  parser?: string;
 };
 
 export type DataSourceConnection = {
@@ -782,6 +786,7 @@ export type DataSourcesPayload = {
   catalog: DataSourceConnector[];
   mapping_targets: { id: string; table: string; label: string; fields: string[] }[];
   connections: DataSourceConnection[];
+  hyperdrive_bindings?: string[];
 };
 
 export type DataSourceProbe = {

@@ -747,12 +747,18 @@ for (const w of WIDTHS) {
         const text = pageEl ? pageEl.innerText : document.body.innerText;
         const badges = [...document.querySelectorAll('[data-testid="sync-mode-badge"]')].map((el) => el.textContent || "");
         const http = badges.filter((b) => /live http/i.test(b)).length;
-        const gateway = badges.filter((b) => /gateway|config only/i.test(b)).length;
-        return { hasPage: !!pageEl, hasStripe: /Stripe/i.test(text), hasOracle: /Oracle/i.test(text), http, gateway, leakedSecret: /sk_live_|AWS4|BEGIN RSA/i.test(text) };
+        const gateway = badges.filter((b) => /gateway/i.test(b)).length;
+        const hyper = badges.filter((b) => /hyperdrive/i.test(b)).length;
+        const file = badges.filter((b) => /^\\s*file\\s*$/i.test(b)).length;
+        const planned = badges.filter((b) => /planned/i.test(b)).length;
+        const filterBar = !!document.querySelector('[data-testid="filter-bar"]');
+        return { hasPage: !!pageEl, hasStripe: /Stripe/i.test(text), hasOracle: /Oracle/i.test(text), hasCustom: /Custom database/i.test(text), hasSearch: !!document.querySelector('[data-testid="catalog-search"]'), http, gateway, hyper, file, planned, filterBar, leakedSecret: /sk_live_[A-Za-z0-9]{8,}|AWS4|BEGIN RSA/i.test(text) };
       });
       if (!ds.hasPage) errors.push({ w, type: "data-sources", msg: "Data sources catalog missing", url: path });
-      if (!ds.hasStripe || !ds.hasOracle) errors.push({ w, type: "data-sources", msg: "Expected Stripe and Oracle in the catalog", url: path });
-      if (ds.http < 1 || ds.gateway < 1) errors.push({ w, type: "data-sources", msg: "Expected both live HTTP and gateway badges", url: path });
+      if (!ds.hasStripe || !ds.hasOracle || !ds.hasCustom) errors.push({ w, type: "data-sources", msg: "Expected Stripe, Oracle and Custom database in the catalog", url: path });
+      if (!ds.hasSearch) errors.push({ w, type: "data-sources", msg: "Catalog search missing", url: path });
+      if (ds.http < 1 || ds.gateway < 1 || ds.hyper < 1 || ds.file < 1 || ds.planned < 1) errors.push({ w, type: "data-sources", msg: "Expected Live HTTP, Hyperdrive, Gateway, File and Planned badges", url: path, detail: ds });
+      if (ds.filterBar) errors.push({ w, type: "filter-bar", msg: "Global filters should be hidden on Data sources", url: path });
       if (ds.leakedSecret) errors.push({ w, type: "data-sources", msg: "Possible secret material in the catalog", url: path });
       await page.screenshot({ path: "/workspace/verify/v10-datasources-catalog.png", fullPage: true });
       await page.goto(BASE + "/settings/data-sources/new/oracle", { waitUntil: "networkidle", timeout: 45000 }).catch((e) => errors.push({ w, type: "nav", msg: String(e), url: "/settings/data-sources/new/oracle" }));
@@ -760,10 +766,32 @@ for (const w of WIDTHS) {
         const el = document.querySelector('[data-testid="data-source-form"]');
         const text = el ? el.innerText : "";
         const honesty = document.querySelector('[data-testid="connector-honesty"]')?.textContent || "";
-        return { hasForm: !!el, honesty: honesty.slice(0, 240), mentionsTcp: /TCP|Oracle Net|free plan/i.test(honesty + text) };
+        const setup = document.querySelector('[data-testid="relay-setup"]')?.textContent || "";
+        const filterBar = !!document.querySelector('[data-testid="filter-bar"]');
+        return { hasForm: !!el, honesty: honesty.slice(0, 240), mentionsTcp: /TCP|Oracle Net|cloudflared|Tunnel/i.test(honesty + text + setup), hasSetup: /cloudflared|Tunnel/i.test(setup), filterBar };
       });
       if (!form.hasForm || !form.mentionsTcp) errors.push({ w, type: "data-sources", msg: "Oracle form missing an honest TCP/gateway note", url: "/settings/data-sources/new/oracle" });
+      if (!form.hasSetup) errors.push({ w, type: "data-sources", msg: "Oracle form missing Cloudflare Tunnel setup steps", url: "/settings/data-sources/new/oracle" });
+      if (form.filterBar) errors.push({ w, type: "filter-bar", msg: "Global filters should be hidden on connector forms", url: "/settings/data-sources/new/oracle" });
       await page.screenshot({ path: "/workspace/verify/v10-datasources-oracle.png", fullPage: true });
+      await page.goto(BASE + "/settings/data-sources/new/mysql", { waitUntil: "networkidle", timeout: 45000 }).catch((e) => errors.push({ w, type: "nav", msg: String(e), url: "/settings/data-sources/new/mysql" }));
+      const mysql = await page.evaluate(() => {
+        const setup = document.querySelector('[data-testid="relay-setup"]')?.textContent || "";
+        const honesty = document.querySelector('[data-testid="connector-honesty"]')?.textContent || "";
+        return { hasSetup: /Hyperdrive/i.test(setup), mentionsFree: /free plan|100,000/i.test(setup + honesty) };
+      });
+      if (!mysql.hasSetup || !mysql.mentionsFree) errors.push({ w, type: "data-sources", msg: "MySQL form missing Hyperdrive setup / free-plan note", url: "/settings/data-sources/new/mysql" });
+    }
+    if (w === 1440 && path === "/") {
+      const fb = await page.evaluate(() => ({
+        hasBar: !!document.querySelector('[data-testid="filter-bar"]'),
+        hint: (document.querySelector('[data-testid="filter-applies-hint"]')?.textContent || "").trim(),
+      }));
+      if (!fb.hasBar || !/filters apply to this page/i.test(fb.hint)) errors.push({ w, type: "filter-bar", msg: "Executive should show the filter bar and an applies-to-this-page hint", url: "/" });
+    }
+    if (w === 1440 && path === "/settings") {
+      const hidden = await page.evaluate(() => !document.querySelector('[data-testid="filter-bar"]'));
+      if (!hidden) errors.push({ w, type: "filter-bar", msg: "Global filters should be hidden on Settings", url: "/settings" });
     }
     if (w === 1440 && path === "/investigate") {
       const payout = "/investigate/" + encodeURIComponent("payouts:under_payout:PAY-MER002-2026-10");
@@ -1112,12 +1140,13 @@ async function sectionDataSources() {
   const stripe = catalog.find((c) => c.id === "stripe");
   const oracle = catalog.find((c) => c.id === "oracle");
   const ids = new Set(catalog.map((c) => c.id));
-  const required = ["snowflake","databricks","aws_s3","gcs","bigquery","azure_blob","oracle","hive","mysql","mongodb","postgres","stripe","chargebee","zuora","recurly","razorpay","quickbooks","xero","zoho_books","netsuite","freshbooks"];
+  const required = ["snowflake","databricks","aws_s3","gcs","bigquery","azure_blob","oracle","hive","mysql","mongodb","postgres","stripe","chargebee","zuora","recurly","razorpay","quickbooks","xero","zoho_books","netsuite","freshbooks","sftp_drop","csv_excel_upload","visa_vss","mastercard_ipm","npci_switch_reports","payu","adyen","mt940","camt053","custom_database","rest_api"];
   const missing = required.filter((id) => !ids.has(id));
-  const leaked = JSON.stringify(b).includes("credentials_enc") || /sk_live_|DATA_SOURCES_KEK\s*=/.test(JSON.stringify(b));
-  const ok = r.ok && missing.length === 0 && stripe?.sync_mode === "http" && oracle?.sync_mode === "gateway" && !leaked && Array.isArray(b.connections);
+  const mysql = catalog.find((c) => c.id === "mysql");
+  const leaked = JSON.stringify(b).includes("credentials_enc") || /sk_live_[A-Za-z0-9]{8,}|DATA_SOURCES_KEK\s*=/.test(JSON.stringify(b));
+  const ok = r.ok && missing.length === 0 && catalog.length >= 50 && stripe?.sync_mode === "http" && oracle?.sync_mode === "gateway" && mysql?.sync_mode === "hyperdrive" && !leaked && Array.isArray(b.connections);
   card.add("file_parsers", { technical: ok ? "pass" : "fail" });
-  card.notes.push(`Data sources catalog ${catalog.length} connectors, missing=[${missing.join(",")}] stripe=${stripe?.sync_mode} oracle=${oracle?.sync_mode} kek=${b.kek_configured} leaked=${leaked}`);
+  card.notes.push(`Data sources catalog ${catalog.length} connectors, missing=[${missing.join(",")}] stripe=${stripe?.sync_mode} oracle=${oracle?.sync_mode} mysql=${mysql?.sync_mode} kek=${b.kek_configured} leaked=${leaked} bindings=${(b.hyperdrive_bindings || []).length}`);
   if (!ok) card.remaining.push(`Data sources API unexpected: status=${r.status} missing=${missing.join(",")} leaked=${leaked}`);
   return ok;
 }
