@@ -1,3 +1,5 @@
+import { safeFetch, assertSafeHttpsDestination } from "../ssrf";
+
 export type RelayProbeResult = {
   ok: boolean;
   message: string;
@@ -111,8 +113,14 @@ export async function probeTunnelHealth(
   } catch {
     return { ok: false, probe, latency_ms: Date.now() - t0, message: "Gateway URL must be a valid HTTPS URL." };
   }
-  if (base.protocol !== "https:" && base.protocol !== "http:") {
-    return { ok: false, probe, latency_ms: Date.now() - t0, message: "Gateway URL must be http or https. This Worker will not open Oracle Net, Hive Thrift or MongoDB TCP itself." };
+  if (base.protocol !== "https:") {
+    return { ok: false, probe, latency_ms: Date.now() - t0, message: "Gateway URL must be HTTPS. This Worker will not open http, Oracle Net, Hive Thrift or MongoDB TCP itself." };
+  }
+  try {
+    await assertSafeHttpsDestination(base.toString());
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "That host is not allowed.";
+    return { ok: false, probe, latency_ms: Date.now() - t0, message: msg };
   }
   const headers: Record<string, string> = { accept: "application/json, text/plain, */*" };
   if (accessId) headers["CF-Access-Client-Id"] = accessId;
@@ -125,7 +133,7 @@ export async function probeTunnelHealth(
   let lastErr = "";
   for (const url of candidates) {
     try {
-      const res = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
+      const res = await safeFetch(url, { method: "GET", headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
       const text = sanitize(await res.text(), secrets).slice(0, 240);
       last = { status: res.status, text, url };
       if (res.ok) {

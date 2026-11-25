@@ -59,8 +59,9 @@ const FEE_AREAS = ["gateway", "network", "partner"] as const;
 
 export default function AreaPage() {
   const { slug } = useParams();
-  const primary = ROUTE_TO_AREA[slug || ""] || "authorization";
-  const ids = slug === "fees" ? [...FEE_AREAS] : [primary];
+  const known = Boolean(slug && (slug in ROUTE_TO_AREA));
+  const primary = ROUTE_TO_AREA[slug || ""] || "";
+  const ids = slug === "fees" ? [...FEE_AREAS] : primary ? [primary] : [];
   const [pages, setPages] = useState<AreaDetail[]>([]);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<ExceptionRow | null>(null);
@@ -69,10 +70,11 @@ export default function AreaPage() {
   useEffect(() => {
     setPages([]);
     setError("");
+    if (!known) return;
     Promise.all(ids.map((id) => api.area(id)))
       .then(setPages)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [slug]);
+  }, [slug, known]);
 
   const exceptions = useMemo(() => {
     const rows = pages.flatMap((p) => p.exceptions);
@@ -83,6 +85,14 @@ export default function AreaPage() {
     });
   }, [pages, filters]);
 
+  if (!known) {
+    return (
+      <div className="space-y-3" data-testid="not-found">
+        <h1 className="text-2xl font-semibold tracking-tight text-ink">Page not found</h1>
+        <p className="text-sm text-muted">There is no revenue-assurance area at “{slug}”. Check the navigation or go back to the executive summary.</p>
+      </div>
+    );
+  }
   if (error) return <p className="text-danger">{error}</p>;
   if (!pages.length) return <p className="text-muted">Loading recon…</p>;
 

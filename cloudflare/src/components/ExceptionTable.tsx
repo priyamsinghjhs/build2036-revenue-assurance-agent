@@ -53,7 +53,7 @@ export function ExceptionTable({
           {head("expected_amount", "Expected")}
           {head("actual_amount", "Actual")}
           {head("leakage", "Leakage")}
-          <TH></TH>
+          <TH><span className="sr-only">Investigate</span></TH>
         </tr>
       </THead>
       <tbody>

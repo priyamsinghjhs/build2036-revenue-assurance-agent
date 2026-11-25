@@ -6,6 +6,8 @@ import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import { networkRisk } from "./network";
 import { compileExpectedFeeExpr, persistAndRunTests, loadRuleTests, validateFeeExpression } from "./sqlRule";
 import { listSuggestionDecisions } from "./auditor";
+import { AppError } from "../shared/errors";
+import { isOutOfScopeQuestion, OUT_OF_SCOPE_MESSAGE } from "../shared/askScope";
 import {
   ASK_SCHEMA_PROMPT,
   ASK_VIEWS,
@@ -97,7 +99,7 @@ export async function getDocument(db: AppDb, id: string) {
 export async function decideRule(db: AppDb, ruleId: string, status: "approved" | "rejected", who: string) {
   if (status === "approved") {
     const row = await db.prepare("SELECT tests_passed, sql_expression FROM ra_extracted_rules WHERE rule_id=?").bind(ruleId).first<{ tests_passed: number; sql_expression: string }>();
-    if (!row) throw new Error("Rule not found");
+    if (!row) throw new AppError("Rule not found", 404);
     if (!row.sql_expression) throw new Error("Rule has no validated sql_expression");
     if (!Number(row.tests_passed)) throw new Error("Rule must pass synthetic edge-case tests before activation");
   }
@@ -469,14 +471,15 @@ export async function submitReview(
   id: string,
   body: { decision: "approved" | "rejected" | "reinvestigate"; comment: string; amount_override?: number; reviewer?: string },
 ) {
-  if (!body.comment || !body.comment.trim()) throw new Error("A comment is required");
-  if (!["approved", "rejected", "reinvestigate"].includes(body.decision)) throw new Error("Invalid decision");
+  if (!body.comment || !body.comment.trim()) throw new AppError("A comment is required", 400);
+  if (!["approved", "rejected", "reinvestigate"].includes(body.decision)) throw new AppError("Invalid decision", 400);
   const db = getDb(env);
   const current = await getReview(db, id);
-  if (!current?.review) throw new Error("Review item not found");
+  if (!current?.review) throw new AppError("Review item not found", 404);
   const exceptionId = String(current.review.exception_id);
   const runId = String(current.review.run_id);
-  const reviewer = body.reviewer || "Priyam Singh";
+  const reviewer = body.reviewer;
+  if (!reviewer) throw new AppError("A signed-in reviewer is required", 401);
   const reviewId = crypto.randomUUID();
   const amount = body.amount_override != null ? normalizeAmount(body.amount_override) : normalizeAmount((current.exception as { leakage?: number } | null)?.leakage ?? 0);
   const actionStatus = body.decision === "approved" ? "approved" : body.decision === "rejected" ? "rejected" : "proposed";
@@ -806,6 +809,20 @@ export async function askData(env: Env, question: string) {
   const db = getDb(env);
   const started = Date.now();
   const trimmedQ = question.trim();
+  if (isOutOfScopeQuestion(trimmedQ)) {
+    await logAsk(db, question, "", "refused", OUT_OF_SCOPE_MESSAGE);
+    return {
+      question,
+      sql: "",
+      status: "refused" as const,
+      error: OUT_OF_SCOPE_MESSAGE,
+      rows: [] as Record<string, unknown>[],
+      answer: OUT_OF_SCOPE_MESSAGE,
+      source: "scope",
+      cached: false,
+      timing_ms: Date.now() - started,
+    };
+  }
   const key = cacheKey(trimmedQ);
   const hit = ASK_CACHE.get(key);
   if (hit && Date.now() - hit.at < ASK_CACHE_TTL_MS) {

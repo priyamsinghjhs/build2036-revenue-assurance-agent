@@ -8,7 +8,7 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { api, db, BOOK_SQL, EXPOSURE, RESULTS, Scorecard, nearly, BASE } from "./lib.mjs";
+import { api, db, BOOK_SQL, EXPOSURE, RESULTS, Scorecard, nearly, BASE, login } from "./lib.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const card = new Scorecard();
@@ -68,6 +68,24 @@ for (const [id, auto, why] of AGENTS) {
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
+}
+
+
+async function sectionAuth() {
+  const noCookie = { noAuth: true, headers: { cookie: "" } };
+  const unauth = await api("/api/executive", noCookie);
+  if (unauth.status !== 401) {
+    card.remaining.push(`Unauthenticated GET /api/executive returned ${unauth.status}, expected 401`);
+  }
+  const bad = await api("/api/auth/login", { method: "POST", noAuth: true, body: JSON.stringify({ username: "admin@ra.local", password: "not-the-real-password" }) });
+  if (bad.status !== 401) card.remaining.push(`Bad password login returned ${bad.status}, expected 401`);
+  const session = await login();
+  const exec = await api("/api/executive");
+  const weather = await api("/api/ask", { method: "POST", body: JSON.stringify({ question: "What's the weather in Delhi tomorrow?" }) });
+  const oos = weather.body?.status === "refused" || /outside the revenue-assurance book/i.test(String(weather.body?.answer || weather.body?.error || ""));
+  card.notes.push(`Auth: unauth executive=${unauth.status}; login user=${session.user?.id || "ok"}; weather ask refused=${oos} status=${weather.body?.status}`);
+  if (!exec.ok) throw new Error("Authenticated /api/executive failed");
+  if (!oos) card.remaining.push("Ask did not refuse the out-of-scope weather question");
 }
 
 async function sectionLiveApi() {
@@ -457,7 +475,10 @@ async function triggerScheduled() {
   const url = process.env.REGRESSION_DATABASE_URL || r(process.env.REGRESSION_DATABASE_URL_FILE || "/workspace/secrets/neon_regression_url", "utf8").trim();
   let prev = "";
   try { prev = r(devVars, "utf8"); } catch { /* none */ }
-  w(devVars, `DATABASE_URL=${url}\n`, { mode: 0o600 });
+  let existing = "";
+  try { existing = r(devVars, "utf8"); } catch { existing = ""; }
+  const kept = existing.split(/\n/).filter((line) => line && !line.startsWith("DATABASE_URL=")).join("\n");
+  w(devVars, `${kept ? kept + "\n" : ""}DATABASE_URL=${url}\n`, { mode: 0o600 });
   const redact = (s) => s.replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "[REDACTED_DATABASE_URL]");
   const child = spawn("npx", ["wrangler", "dev", "--test-scheduled", "--port", "8789", "--ip", "127.0.0.1"], {
     cwd: ROOT,
@@ -621,6 +642,17 @@ const PAGES = [
   "/models", "/false-declines", "/open-data", "/settings", "/settings/data-sources",
 ];
 const browser = await chromium.launch({ channel: "chrome", headless: true });
+const password = process.env.APP_SHARED_PASSWORD || "";
+if (!password) throw new Error("APP_SHARED_PASSWORD is not set");
+const loginCtx = await browser.newContext();
+const loginPage = await loginCtx.newPage();
+await loginPage.goto(BASE + "/login", { waitUntil: "networkidle", timeout: 45000 });
+await loginPage.fill('[data-testid="login-username"]', "admin@ra.local");
+await loginPage.fill('[data-testid="login-password"]', password);
+await loginPage.click('[data-testid="login-submit"]');
+await loginPage.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 20000 });
+const storage = await loginCtx.storageState();
+await loginCtx.close();
 const errors = [];
 const overlaps = [];
 const charts = [];
@@ -673,7 +705,7 @@ function chartAudit() {
   return out;
 }
 for (const w of WIDTHS) {
-  const context = await browser.newContext({ viewport: { width: w, height: 1400 } });
+  const context = await browser.newContext({ viewport: { width: w, height: 1400 }, storageState: storage });
   const page = await context.newPage();
   page.on("pageerror", (e)=>errors.push({ w, type:"pageerror", msg:e.message, url:page.url() }));
   page.on("console", (msg)=>{ if (msg.type()==="error") errors.push({ w, type:"console", msg:msg.text(), url:page.url() }); });
@@ -1002,6 +1034,7 @@ async function sectionTypecheck() {
   const tscA = spawnSync("npx", ["tsc", "-p", "tsconfig.app.json", "--noEmit"], { cwd: ROOT, encoding: "utf8" });
   const cfo = spawnSync("npx", ["tsx", "tests/auditor-cfo.test.ts"], { cwd: ROOT, encoding: "utf8" });
   const numbers = spawnSync("npx", ["tsx", "scripts/test-numbers.ts"], { cwd: ROOT, encoding: "utf8" });
+  const auth = spawnSync("npx", ["tsx", "scripts/test-auth.ts"], { cwd: ROOT, encoding: "utf8" });
   const grounding = spawnSync("npx", ["tsx", "scripts/test-grounding.ts"], { cwd: ROOT, encoding: "utf8" });
   const ok = tscW.status === 0 && tscA.status === 0 && cfo.status === 0 && numbers.status === 0 && grounding.status === 0;
   card.notes.push(`Typecheck worker ${tscW.status === 0 ? "ok" : "FAIL"} frontend ${tscA.status === 0 ? "ok" : "FAIL"}; auditor CFO ${cfo.status === 0 ? "ok" : "FAIL"}; numbers ${numbers.status === 0 ? "ok" : "FAIL"}; grounding ${grounding.status === 0 ? "ok" : "FAIL"}`);
@@ -1163,6 +1196,8 @@ async function sectionDataSources() {
 async function main() {
   console.log("Regression against", BASE, "results →", RESULTS);
   const sql = db();
+  console.log("section: auth");
+  await sectionAuth();
   console.log("section: live API");
   await sectionLiveApi();
   console.log("section: SQL safety");

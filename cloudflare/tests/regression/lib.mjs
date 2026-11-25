@@ -19,14 +19,43 @@ export function db() {
   return neon(url, { fetchOptions: { timeout: 180000 } });
 }
 
+let sessionCookie = process.env.REGRESSION_COOKIE || "";
+
+/** Log in with APP_SHARED_PASSWORD from the environment. Never prints the password. */
+export async function login(username = process.env.REGRESSION_USER || "admin@ra.local") {
+  const password = process.env.APP_SHARED_PASSWORD || "";
+  if (!password) throw new Error("APP_SHARED_PASSWORD is not set");
+  const r = await fetch(BASE + "/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, password }),
+    signal: AbortSignal.timeout(45_000),
+  });
+  const text = await r.text();
+  let body;
+  try { body = JSON.parse(text); } catch { body = {}; }
+  if (!r.ok) throw new Error(body.error || `login failed (${r.status})`);
+  const set = r.headers.getSetCookie?.() || (r.headers.get("set-cookie") ? [r.headers.get("set-cookie")] : []);
+  const ra = set.map(String).find((c) => c.startsWith("ra_session="));
+  if (!ra) throw new Error("login did not return a session cookie");
+  sessionCookie = ra.split(";")[0];
+  return { user: body.user, cookie: sessionCookie };
+}
+
+export function setSessionCookie(cookie) {
+  sessionCookie = cookie || "";
+}
+
 export async function api(path, opts = {}) {
   const t0 = Date.now();
   let lastErr;
+  const { noAuth, ...fetchOpts } = opts;
+  const authHeaders = !noAuth && sessionCookie ? { cookie: sessionCookie } : {};
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const r = await fetch(BASE + path, {
-        ...opts,
-        headers: { "content-type": "application/json", ...(opts.headers || {}) },
+        ...fetchOpts,
+        headers: { "content-type": "application/json", ...authHeaders, ...(fetchOpts.headers || {}) },
         signal: AbortSignal.timeout(45_000),
       });
       const text = await r.text();

@@ -2,6 +2,7 @@ import { neon } from "@neondatabase/serverless";
 import type { ConnectorDef } from "./catalog";
 import { listHyperdriveBindingNames, probeHyperdrive, probeTunnelHealth } from "./relay";
 import { parseSample } from "./fileParsers";
+import { safeFetch } from "../ssrf";
 
 export type ProbeResult = {
   ok: boolean;
@@ -22,7 +23,7 @@ function sanitize(message: string, secrets: string[]): string {
 }
 
 async function timedFetch(url: string, init: RequestInit, secrets: string[]): Promise<{ status: number; text: string; ok: boolean }> {
-  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  const res = await safeFetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
   const text = await res.text();
   return { status: res.status, text: sanitize(text, secrets).slice(0, 240), ok: res.ok };
 }
@@ -431,7 +432,7 @@ async function probeGenericHttp(url: string, get: (n: string) => string, secrets
 async function probeSampleFile(connector: ConnectorDef, url: string, get: (n: string) => string, _secrets: string[], t0: number): Promise<ProbeResult> {
   try {
     const headers = authHeaders(get);
-    const res = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const res = await safeFetch(url, { method: "GET", headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
     const buf = new Uint8Array(await res.arrayBuffer());
     const text = new TextDecoder("utf-8", { fatal: false }).decode(buf);
     if (!res.ok) return { ok: false, http_status: res.status, probe: connector.probe_name, latency_ms: Date.now() - t0, message: `Sample URL responded HTTP ${res.status}. A parse was not attempted.` };

@@ -13,6 +13,7 @@ async function request<T>(path: string, init?: RequestOpts): Promise<T> {
   try {
     response = await fetch(path, {
       ...rest,
+      credentials: "same-origin",
       signal: ac.signal,
       headers: {
         Accept: "application/json",
@@ -43,14 +44,30 @@ async function request<T>(path: string, init?: RequestOpts): Promise<T> {
   } catch {
     throw new Error(text || `Request failed (${response.status})`);
   }
+  if (response.status === 401 && !path.startsWith("/api/auth/")) {
+    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search);
+      window.location.assign(`/login?next=${next}`);
+    }
+  }
   if (!response.ok) {
     const err = data as { error?: string; message?: string };
-    throw new Error(err?.error || err?.message || `Request failed (${response.status})`);
+    const error = new Error(err?.error || err?.message || `Request failed (${response.status})`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
   return data as T;
 }
 
 export const api = {
+  me: () => request<{ user: { id: string; role: string; name: string } }>("/api/auth/me"),
+  login: (username: string, password: string) =>
+    request<{ ok: true; user: { id: string; role: string; name: string } }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => request<{ ok: true }>("/api/auth/logout", { method: "POST", body: "{}" }),
+  users: () => request<{ users: { id: string; role: string; name: string }[] }>("/api/auth/users"),
   overview: () => request<Overview>("/api/dashboard/overview"),
   areas: () => request<{ areas: AreaMeta[] }>("/api/areas"),
   area: (id: string) => request<AreaDetail>(`/api/areas/${id}`),

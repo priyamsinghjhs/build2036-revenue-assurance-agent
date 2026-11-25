@@ -21,7 +21,9 @@ interface SubtleCrypto {
   encrypt(algorithm: { name: string; iv: BufferSource }, key: CryptoKey, data: BufferSource): Promise<ArrayBuffer>;
   decrypt(algorithm: { name: string; iv: BufferSource }, key: CryptoKey, data: BufferSource): Promise<ArrayBuffer>;
   sign(algorithm: unknown, key: CryptoKey, data: BufferSource): Promise<ArrayBuffer>;
+  verify(algorithm: unknown, key: CryptoKey, signature: BufferSource, data: BufferSource): Promise<boolean>;
   digest(algorithm: string, data: BufferSource): Promise<ArrayBuffer>;
+  deriveBits(algorithm: unknown, baseKey: CryptoKey, length: number): Promise<ArrayBuffer>;
 }
 interface Crypto {
   randomUUID(): string;
@@ -45,6 +47,9 @@ declare class URL {
   readonly pathname: string;
   readonly protocol: string;
   readonly host: string;
+  readonly hostname: string;
+  username: string;
+  password: string;
   toString(): string;
 }
 declare class AbortSignal { static timeout(ms: number): AbortSignal; }
@@ -53,28 +58,57 @@ declare function fetch(input: string, init?: RequestInit): Promise<Response>;
 
 interface RequestInit {
   method?: string;
-  headers?: Record<string, string>;
+  headers?: Record<string, string> | Headers;
   body?: string | URLSearchParams;
   signal?: AbortSignal;
+  redirect?: "follow" | "manual" | "error";
 }
 
 interface ResponseInit {
   status?: number;
-  headers?: Record<string, string>;
+  statusText?: string;
+  headers?: Headers | Record<string, string>;
 }
 
 declare class Request {
   constructor(input: string | Request, init?: RequestInit);
+  readonly url: string;
+  readonly method: string;
+  headers: Headers;
+  text(): Promise<string>;
+  json(): Promise<unknown>;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+declare class Headers {
+  constructor(init?: Headers | Record<string, string>);
+  get(name: string): string | null;
+  set(name: string, value: string): void;
+  append(name: string, value: string): void;
+  entries(): IterableIterator<[string, string]>;
+}
+
+interface ResponseInit {
+  status?: number;
+  statusText?: string;
+  headers?: Headers | Record<string, string>;
 }
 
 declare class Response {
-  constructor(body?: string, init?: ResponseInit);
+  constructor(body?: BodyInit | string | null, init?: ResponseInit);
   readonly ok: boolean;
   readonly status: number;
+  readonly statusText: string;
+  readonly headers: Headers;
+  readonly body: ReadableStream<Uint8Array> | null;
   text(): Promise<string>;
+  json(): Promise<unknown>;
   arrayBuffer(): Promise<ArrayBuffer>;
   clone(): Response;
 }
+
+type BodyInit = ArrayBuffer | Uint8Array | ReadableStream<Uint8Array> | string;
+
 
 interface Cache {
   match(request: Request): Promise<Response | undefined>;
@@ -97,4 +131,7 @@ interface ScheduledEvent {
 interface ExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
   passThroughOnException(): void;
+  props?: unknown;
 }
+
+declare const console: { log(...args: unknown[]): void; error(...args: unknown[]): void; warn(...args: unknown[]): void; };

@@ -37,7 +37,8 @@ assert(parseLooseNumber("abc") == null, "loose garbage");
 const sql = publicErrorMessage(new Error('invalid input syntax for type integer: "0.9"'));
 assert(!sql.includes("0.9"), "must not leak postgres detail");
 assert(/unexpected format/i.test(sql), `friendly sql: ${sql}`);
-assert(publicErrorMessage(new Error("Unknown agent_id")).includes("Unknown agent_id"), "keep short app errors");
+assert(!publicErrorMessage(new Error("Unknown agent_id")).includes("Unknown agent_id"), "unclassified short errors stay generic");
+assert(!publicErrorMessage(new Error("numeric field overflow")).includes("numeric field overflow"), "no raw overflow");
 
 
 eq(formatConfidence(70), "70%", "already-percent integer is not scaled");

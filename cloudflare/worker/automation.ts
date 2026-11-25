@@ -261,12 +261,12 @@ export async function runDailyAutomation(env: Env, opts: { force?: boolean; skip
   }
 }
 
-export async function setActionStatus(db: AppDb, actionId: string, status: "approved" | "rejected" | "done", note?: string) {
+export async function setActionStatus(db: AppDb, actionId: string, status: "approved" | "rejected" | "done", note?: string, decidedBy?: string) {
   const row = await db.prepare("SELECT action_id FROM ra_action_queue WHERE action_id = ?").bind(actionId).first();
   if (!row) return false;
   await db
-    .prepare("UPDATE ra_action_queue SET status = ?, decided_at = ?, decision_note = ? WHERE action_id = ?")
-    .bind(status, new Date().toISOString(), note ?? null, actionId)
+    .prepare("UPDATE ra_action_queue SET status = ?, decided_at = ?, decision_note = ?, decided_by = COALESCE(?, decided_by) WHERE action_id = ?")
+    .bind(status, new Date().toISOString(), note ?? null, decidedBy ?? null, actionId)
     .run();
   return true;
 }

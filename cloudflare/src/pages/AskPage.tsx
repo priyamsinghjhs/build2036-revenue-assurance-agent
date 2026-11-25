@@ -128,7 +128,7 @@ export default function AskPage() {
       )}
       {data && (
         <>
-          {data.answer && data.status === "ok" && (
+          {data.answer && (data.status === "ok" || data.status === "refused") && (
             <Card data-testid="ask-answer">
               <CardHeader>
                 <CardTitle>Answer</CardTitle>

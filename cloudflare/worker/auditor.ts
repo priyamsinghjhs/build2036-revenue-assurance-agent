@@ -674,7 +674,8 @@ export async function decideAuditorSuggestion(
     .catch(() => null);
   if (existing) return { already: true, decision: existing };
 
-  const reviewer = body.reviewer || "Priyam Singh";
+  const reviewer = body.reviewer;
+  if (!reviewer) throw new Error("A signed-in reviewer is required");
   const decisionId = crypto.randomUUID();
   let actionId: string | null = null;
   let draftId: string | null = null;

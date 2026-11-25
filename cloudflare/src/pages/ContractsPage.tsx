@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useAuth } from "@/auth";
 import { api, type ContractRule, type ContractsPayload, type DocumentDetail, type RuleTest } from "@/api";
 import { KpiCard } from "@/components/KpiCard";
 import { Button } from "@/components/ui/button";
@@ -7,6 +8,8 @@ import { inr } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export default function ContractsPage() {
+  const canApproveRules = useAuth().can("approve_review");
+  const canTest = useAuth().can("recon_run");
   const [data, setData] = useState<ContractsPayload | null>(null);
   const [doc, setDoc] = useState<DocumentDetail | null>(null);
   const [sel, setSel] = useState("");
@@ -140,13 +143,13 @@ export default function ContractsPage() {
                   <td className="py-2 pr-3 text-right tabular-nums text-danger">{Number(r.impact||0) ? inr(Number(r.impact), true) : "—"}</td>
                   <td className="py-2">
                     <div className="flex flex-wrap gap-1">
-                      {r.status === "extracted" && (
+                      {r.status === "extracted" && canApproveRules && (
                         <>
                           <Button size="sm" disabled={!!busy || !Number(r.tests_passed)} onClick={() => void decide(r.rule_id, "approved")}>Approve</Button>
                           <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void decide(r.rule_id, "rejected")}>Reject</Button>
                         </>
                       )}
-                      <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void runTests(r.rule_id)}>Run tests</Button>
+                      {canTest ? <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void runTests(r.rule_id)}>Run tests</Button> : null}
                     </div>
                   </td>
                 </tr>

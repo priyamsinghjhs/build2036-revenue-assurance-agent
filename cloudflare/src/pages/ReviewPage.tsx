@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { inr } from "@/lib/format";
 import { AuditPanel } from "@/components/AuditPanel";
+import { useAuth } from "@/auth";
 
 function asObj(v: unknown): Record<string, unknown> {
   if (!v) return {};
@@ -14,6 +15,8 @@ function asObj(v: unknown): Record<string, unknown> {
 }
 
 export default function ReviewPage() {
+  const { can } = useAuth();
+  const canDecide = can("approve_review");
   const { id = "" } = useParams();
   const decoded = decodeURIComponent(id);
   const [data, setData] = useState<ReviewDetail | null>(null);
@@ -113,13 +116,14 @@ export default function ReviewPage() {
             <span className="mb-1 block text-[11px] uppercase tracking-wide text-muted">Amount override (optional)</span>
             <input value={override} onChange={(e)=>setOverride(e.target.value)} className="w-full rounded-md border border-line px-3 py-2 text-sm tabular-nums" disabled={!pending} />
           </label>
-          {pending ? (
+          {pending && canDecide ? (
             <div className="flex flex-wrap gap-2">
               <Button disabled={!!busy} onClick={()=>void decide("approved")}>{busy==="approved"?"Saving…":"Approve"}</Button>
               <Button variant="outline" disabled={!!busy} onClick={()=>void decide("rejected")}>{busy==="rejected"?"Saving…":"Reject"}</Button>
               <Button variant="outline" disabled={!!busy} onClick={()=>void decide("reinvestigate")}>{busy==="reinvestigate"?"Saving…":"Send back for re-investigation"}</Button>
             </div>
-          ) : <p className="text-sm text-muted">This item already has a decision ({data.item.review_status}).</p>}
+          ) : pending ? <p className="text-sm text-muted">This role can view the review but cannot record a decision.</p>
+          : <p className="text-sm text-muted">This item already has a decision ({data.item.review_status}).</p>}
         </CardContent>
       </Card>
     </div>

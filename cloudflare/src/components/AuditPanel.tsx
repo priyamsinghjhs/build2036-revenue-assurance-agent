@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useAuth } from "@/auth";
 import { api, type AuditSuggestion, type SuggestionDecision } from "@/api";
 import { Button } from "@/components/ui/button";
 import { SeverityBadge } from "@/components/SeverityBadge";
@@ -60,6 +61,7 @@ export function AuditPanel({
   compact?: boolean;
   onDecided?: () => void;
 }) {
+  const canDecide = useAuth().can("audit");
   const verdict = String(output.verdict ?? output.signoff ?? "");
   const checks = asChecks(output);
   const findings = asFindings(output);
@@ -206,7 +208,7 @@ export function AuditPanel({
                         : "Dismissed"}
                       {prior.comment ? ` · ${String(prior.comment)}` : ""}
                     </p>
-                  ) : exceptionId ? (
+                  ) : exceptionId && canDecide ? (
                     <div className="mt-2 space-y-2">
                       {commentFor === s.suggestion_id && (
                         <textarea

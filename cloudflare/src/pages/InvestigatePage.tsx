@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { useAuth } from "@/auth";
 import { Play, RefreshCw } from "lucide-react";
 import { api, type ExceptionRow, type SuggestionDecision } from "@/api";
 import { AuditPanel } from "@/components/AuditPanel";
@@ -20,6 +21,7 @@ async function consumeInvestigateSse(
 ): Promise<boolean> {
   const res = await fetch("/api/agents/investigate", {
     method: "POST",
+    credentials: "same-origin",
     headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -56,6 +58,8 @@ function stepComplete(id: StepId, out?: Record<string, unknown>) {
 }
 
 export default function InvestigatePage() {
+  const { can } = useAuth();
+  const canRun = can("recon_run");
   const { exceptionId } = useParams();
   const [row, setRow] = useState<ExceptionRow | null>(null);
   const [pool, setPool] = useState<ExceptionRow[]>([]);
@@ -224,6 +228,7 @@ export default function InvestigatePage() {
                 <div className="text-xl font-semibold text-danger">{inr(row.leakage, true)}</div>
               </div>
             </div>
+            {canRun ? (
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -244,6 +249,9 @@ export default function InvestigatePage() {
                 </button>
               )}
             </div>
+            ) : (
+              <p className="mt-4 text-sm text-muted">This role can view the investigation but cannot start a new run.</p>
+            )}
             {error && <p className="mt-2 text-sm text-danger">{error}</p>}
           </div>
 

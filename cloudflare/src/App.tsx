@@ -1,4 +1,4 @@
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import {
   Banknote,
   Bot,
@@ -36,7 +36,11 @@ import {
   Database,
   Settings,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { AuthProvider, useAuth } from "@/auth";
+import LoginPage from "@/pages/LoginPage";
+import UsersPage from "@/pages/UsersPage";
+import { Users } from "lucide-react";
 import ExecutivePage from "@/pages/ExecutivePage";
 import AreaPage from "@/pages/AreaPage";
 import AgentsPage from "@/pages/AgentsPage";
@@ -150,11 +154,14 @@ const GROUPS = [
     items: [
       { to: "/settings", label: "Settings", icon: Settings },
       { to: "/settings/data-sources", label: "Data sources", icon: Database },
+      { to: "/settings/users", label: "Users", icon: Users },
     ],
   },
 ];
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+  const { navVisible, user } = useAuth();
+  const groups = GROUPS.map((g) => ({ ...g, items: g.items.filter((item) => navVisible(item.to)) })).filter((g) => g.items.length);
   return (
     <div className="flex h-full flex-col">
       <div className="px-5 py-5">
@@ -162,7 +169,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <div className="mt-1 text-sm font-semibold text-white">Revenue assurance</div>
       </div>
       <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 pb-6" aria-label="Primary">
-        {GROUPS.map((g) => (
+        {groups.map((g) => (
           <div key={g.label}>
             <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{g.label}</div>
             <div className="space-y-0.5">
@@ -187,6 +194,13 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           </div>
         ))}
       </nav>
+      {user ? (
+        <div className="border-t border-white/10 px-4 py-3 text-xs text-slate-300" data-testid="signed-in-user">
+          <div className="truncate font-medium text-white">{user.name}</div>
+          <div className="truncate font-mono text-[11px] text-slate-400">{user.id}</div>
+          <div className="uppercase tracking-wide text-slate-400">{user.role}</div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -311,10 +325,22 @@ function FilterBar() {
   );
 }
 
+function RequireAuth({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth();
+  const { pathname, search } = useLocation();
+  if (loading) return <p className="p-8 text-sm text-muted">Checking session…</p>;
+  if (!user) {
+    const next = encodeURIComponent(pathname + search);
+    return <Navigate to={`/login?next=${next}`} replace />;
+  }
+  return <>{children}</>;
+}
+
 function Shell() {
   const [open, setOpen] = useState(false);
   const { pathname } = useLocation();
   const showFilters = pathHonoursFilters(pathname);
+  const { user, logout, can } = useAuth();
   return (
     <div className="flex min-h-screen">
       <aside className="hidden w-60 shrink-0 bg-navy-900 text-white md:block print:hidden">
@@ -343,6 +369,21 @@ function Shell() {
             <span className="hidden rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-warning sm:inline">
               Synthetic book
             </span>
+            {user ? (
+              <div className="flex items-center gap-2 print:hidden">
+                <span className="hidden max-w-[160px] truncate text-xs text-muted sm:inline" data-testid="header-user">
+                  {user.id}
+                </span>
+                <button
+                  type="button"
+                  className="rounded-md border border-line px-2 py-1 text-xs text-ink hover:bg-slate-50"
+                  onClick={() => void logout().then(() => { window.location.assign("/login"); })}
+                  data-testid="logout"
+                >
+                  Sign out
+                </button>
+              </div>
+            ) : null}
           </div>
           {showFilters ? (
             <div className="mx-auto max-w-6xl border-t border-line px-4 py-3 md:px-8">
@@ -365,10 +406,15 @@ function Shell() {
             <Route path="/routing" element={<RoutingPage />} />
             <Route path="/models" element={<ModelsPage />} />
             <Route path="/open-data" element={<OpenDataPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/settings/data-sources" element={<DataSourcesPage />} />
-            <Route path="/settings/data-sources/new/:connectorId" element={<DataSourcesPage />} />
-            <Route path="/settings/data-sources/c/:connectionId" element={<DataSourcesPage />} />
+            {can("settings") ? (
+              <>
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/settings/data-sources" element={<DataSourcesPage />} />
+                <Route path="/settings/data-sources/new/:connectorId" element={<DataSourcesPage />} />
+                <Route path="/settings/data-sources/c/:connectionId" element={<DataSourcesPage />} />
+              </>
+            ) : null}
+            {can("users") ? <Route path="/settings/users" element={<UsersPage />} /> : null}
             <Route path="/ask" element={<AskPage />} />
             <Route path="/cases" element={<CasesPage />} />
             <Route path="/risks" element={<RisksPage />} />
@@ -384,12 +430,24 @@ function Shell() {
   );
 }
 
+function AppRoutes() {
+  const { pathname } = useLocation();
+  if (pathname === "/login") return <LoginPage />;
+  return (
+    <RequireAuth>
+      <Shell />
+    </RequireAuth>
+  );
+}
+
 export default function App() {
   return (
     <TooltipProvider>
-      <FilterProvider>
-        <Shell />
-      </FilterProvider>
+      <AuthProvider>
+        <FilterProvider>
+          <AppRoutes />
+        </FilterProvider>
+      </AuthProvider>
     </TooltipProvider>
   );
 }

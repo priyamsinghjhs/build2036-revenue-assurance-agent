@@ -47,9 +47,28 @@ import { prefetchEvidence, runInvestigation, sseResponse } from "./investigateFl
 import { openDataOverview } from "./openData";
 import { overview as dataSourcesOverview, upsertConnection, deleteConnection, testConnection, syncConnection } from "./dataSources/store";
 import { decideAuditorSuggestion, listSuggestionDecisions, type AuditSuggestion } from "./auditor";
-import { publicErrorMessage } from "../shared/errors";
+import { AppError, publicErrorMessage } from "../shared/errors";
+import type { AppUser } from "../shared/roles";
+import {
+  authMiddleware,
+  assertCanApprove,
+  handleLogin,
+  handleLogout,
+  handleMe,
+  handleUsers,
+  recordAudit,
+  requireUser,
+} from "./auth";
+import { withSecurityHeaders } from "./securityHeaders";
 
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<{ Bindings: Env; Variables: { user?: AppUser } }>();
+
+app.use("/api/*", authMiddleware);
+
+app.post("/api/auth/login", (c) => handleLogin(c));
+app.post("/api/auth/logout", (c) => handleLogout(c));
+app.get("/api/auth/me", (c) => handleMe(c));
+app.get("/api/auth/users", (c) => handleUsers(c));
 
 app.get("/api/health", (c) => c.json({ ok: true, synthetic: true }));
 
@@ -85,15 +104,27 @@ app.post("/api/actions/:id/decision", async (c) => {
   if (!["approved", "rejected", "done"].includes(status)) {
     throw new HTTPException(400, { message: "status must be approved, rejected, or done" });
   }
+  const user = requireUser(c);
+  const db = getDb(c.env);
+  const action = await db
+    .prepare("SELECT action_id, action, amount, exception_id FROM ra_action_queue WHERE action_id = ?")
+    .bind(c.req.param("id"))
+    .first<{ action_id: string; action: string; amount: number; exception_id: string | null }>();
+  if (!action) throw new HTTPException(404, { message: "Action not found" });
+  if (status === "approved") {
+    assertCanApprove(user.role, { action: action.action, exceptionId: action.exception_id, amount: Number(action.amount) });
+  }
   const ok = await setActionStatus(
-    getDb(c.env),
+    db,
     c.req.param("id"),
     status as "approved" | "rejected" | "done",
     optionalString(body, "note") || undefined,
+    user.id,
   );
   if (!ok) throw new HTTPException(404, { message: "Action not found" });
+  await recordAudit(c.env, user, "POST", c.req.path, status, c.req.param("id"), { action: action.action, amount: action.amount });
   invalidateMem();
-  return c.json({ ok: true, action_id: c.req.param("id"), status });
+  return c.json({ ok: true, action_id: c.req.param("id"), status, decided_by: user.id });
 });
 
 
@@ -411,7 +442,8 @@ app.post("/api/contracts/extract", async (c) => {
 app.post("/api/contracts/rules/:id/decision", async (c) => {
   const body = await readJson(c);
   const status = body.status === "rejected" ? "rejected" : "approved";
-  return c.json({ rule: await decideRule(getDb(c.env), c.req.param("id"), status, String(body.reviewer || "Priyam Singh")) });
+  const user = requireUser(c);
+  return c.json({ rule: await decideRule(getDb(c.env), c.req.param("id"), status, user.id) });
 });
 app.get("/api/contracts/search", async (c) => {
   const q = (c.req.query("q") ?? "").trim();
@@ -452,7 +484,7 @@ app.post("/api/cases/:id", async (c) => {
     status: body.status ? String(body.status) : undefined,
     owner: body.owner ? String(body.owner) : undefined,
     comment: body.comment ? String(body.comment) : undefined,
-    actor: body.actor ? String(body.actor) : undefined,
+    actor: requireUser(c).id,
   }));
 });
 app.get("/api/audit/suggestions", async (c) => {
@@ -476,7 +508,7 @@ app.post("/api/audit/suggestions", async (c) => {
       suggestion,
       decision,
       comment: body.comment ? String(body.comment) : undefined,
-      reviewer: body.reviewer ? String(body.reviewer) : undefined,
+      reviewer: requireUser(c).id,
       run_id: body.run_id ? String(body.run_id) : undefined,
     });
     return c.json(result);
@@ -500,7 +532,7 @@ app.post("/api/reviews/:id/decision", async (c) => {
     decision,
     comment: String(body.comment || ""),
     amount_override: body.amount_override == null ? undefined : Number(body.amount_override),
-    reviewer: body.reviewer ? String(body.reviewer) : undefined,
+    reviewer: requireUser(c).id,
   }));
 });
 app.get("/api/ask/schema", (c) => c.json({ views: [...ASK_VIEWS], suggested: SUGGESTED_QUESTIONS }));
@@ -529,7 +561,8 @@ app.get("/api/drafts", async (c) => c.json(await listDrafts(getDb(c.env))));
 app.post("/api/drafts/:id/decision", async (c) => {
   const body = await readJson(c);
   const status = body.status === "rejected" ? "rejected" : "approved";
-  return c.json({ draft: await decideDraft(getDb(c.env), c.req.param("id"), status, String(body.reviewer || "Priyam Singh")) });
+  const user = requireUser(c);
+  return c.json({ draft: await decideDraft(getDb(c.env), c.req.param("id"), status, user.id) });
 });
 app.get("/api/drafts/:id/export", async (c) => {
   const row = await exportDraft(getDb(c.env), c.req.param("id"));
@@ -549,11 +582,24 @@ app.get("/api/graph-query", async (c) => c.json(await graphTools(getDb(c.env), {
 app.get("/api/contracts/rules/:id/tests", async (c) => c.json(await ruleTests(c.env, c.req.param("id"))));
 app.post("/api/contracts/rules/:id/test", async (c) => c.json(await testRule(c.env, c.req.param("id"))));
 app.get("/api/ingestion", async (c) => c.json(await listIngestion(getDb(c.env))));
-app.post("/api/ingestion/parse", async (c) => c.json(await persistIngestion(getDb(c.env))));
+app.post("/api/ingestion/parse", async (c) => {
+  try {
+    return c.json(await persistIngestion(getDb(c.env)));
+  } catch (err) {
+    throw new AppError(publicErrorMessage(err, "The sample files could not be parsed."), 400);
+  }
+});
 
 app.onError((err, c) => {
-  if (err instanceof HTTPException) return err.getResponse();
+  if (err instanceof HTTPException) {
+    const message = publicErrorMessage(err, err.message);
+    return c.json({ error: message }, err.status as 400 | 401 | 403 | 404 | 429 | 500);
+  }
+  if (err instanceof AppError) return c.json({ error: publicErrorMessage(err, err.message) }, err.status as 400 | 401 | 403 | 404 | 429 | 500);
   if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  if (/not found/i.test(msg)) return c.json({ error: publicErrorMessage(err, msg) }, 404);
+  if (/is required|must be |invalid /i.test(msg)) return c.json({ error: publicErrorMessage(err, msg) }, 400);
   return c.json({ error: publicErrorMessage(err) }, 500);
 });
 
@@ -597,8 +643,16 @@ async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext
   await work;
 }
 
+async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const url = new URL(request.url);
+  const res = url.pathname.startsWith("/api/")
+    ? await app.fetch(request, env, ctx as Parameters<typeof app.fetch>[2])
+    : await env.ASSETS.fetch(request);
+  return withSecurityHeaders(res, url.pathname);
+}
+
 export default {
-  fetch: app.fetch,
+  fetch: handleFetch,
   scheduled,
 };
 

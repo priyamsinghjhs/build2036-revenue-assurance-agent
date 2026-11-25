@@ -13,6 +13,7 @@ import { SeverityBadge, StatusDot } from "@/components/SeverityBadge";
 import { Button } from "@/components/ui/button";
 import { formatConfidence, inr, prettyCat, pct } from "@/lib/format";
 import { publicErrorMessage } from "../../shared/errors";
+import { useAuth } from "@/auth";
 
 const DOMAINS = [
   { id: "all", label: "Run all" },
@@ -65,6 +66,7 @@ function batchAgentSequence(sequence: string[]): string[][] {
 }
 
 export default function AgentsPage() {
+  const { can } = useAuth();
   const [roster, setRoster] = useState<Roster | null>(null);
   const [latest, setLatest] = useState<LatestRun | null>(null);
   const [actions, setActions] = useState<ActionRow[]>([]);
@@ -97,7 +99,7 @@ export default function AgentsPage() {
   }, []);
 
   useEffect(() => {
-    api.evalQuality().then(setQuality).catch(() => undefined);
+    if (can("audit")) api.evalQuality().then(setQuality).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -256,10 +258,14 @@ export default function AgentsPage() {
           <p className="text-sm text-muted">Daily cron runs recon, investigates the top exception, and queues actions. Approve or reject below.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button disabled={autoBusy || busy} onClick={runNow}>
+          {can("automation") ? (
+          <Button disabled={autoBusy || busy} onClick={runNow} data-testid="run-now">
             {autoBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             {autoBusy ? "Running…" : "Run now"}
           </Button>
+          ) : null}
+          {can("recon_run") ? (
+          <>
           <select
             className="h-9 rounded-lg border border-line bg-white px-2 text-sm"
             value={domain}
@@ -276,10 +282,12 @@ export default function AgentsPage() {
           <Button variant="outline" disabled={busy || autoBusy} onClick={runPipeline}>
             {busy ? "Running…" : "Advanced pipeline"}
           </Button>
+          </>
+          ) : null}
         </div>
       </header>
       {error && <p className="text-sm text-danger">{error}</p>}
-      {quality && (
+      {quality && can("audit") && (
         <section className="rounded-xl border border-line bg-white p-4">
           <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
             <div>
@@ -476,6 +484,7 @@ function ActionList({ items }: { items: unknown }) {
 }
 
 function ActionQueue({ rows, onDecide }: { rows: ActionRow[]; onDecide: (id: string, status: "approved" | "rejected" | "done") => void }) {
+  const { canApprove } = useAuth();
   if (!rows.length) return <p className="text-sm text-muted">No queued actions yet. Run now to seed recommendations.</p>;
   return (
     <div className="max-h-96 overflow-auto">
@@ -485,7 +494,7 @@ function ActionQueue({ rows, onDecide }: { rows: ActionRow[]; onDecide: (id: str
             <th className="py-1">Action</th>
             <th className="py-1">Amount</th>
             <th className="py-1">Status</th>
-            <th className="py-1"></th>
+            <th className="py-1"><span className="sr-only">Decide</span></th>
           </tr>
         </thead>
         <tbody>
@@ -499,13 +508,13 @@ function ActionQueue({ rows, onDecide }: { rows: ActionRow[]; onDecide: (id: str
               <td className="py-1.5 tabular-nums text-danger">{inr(r.amount, true)}</td>
               <td className="py-1.5 capitalize">{r.status}</td>
               <td className="py-1.5 text-right">
-                {r.status === "proposed" && (
+                {r.status === "proposed" && canApprove({ action: r.action, exceptionId: r.exception_id, amount: r.amount }) && (
                   <div className="flex justify-end gap-1">
                     <Button size="sm" variant="success" onClick={() => onDecide(r.action_id, "approved")}>Approve</Button>
                     <Button size="sm" variant="danger" onClick={() => onDecide(r.action_id, "rejected")}>Reject</Button>
                   </div>
                 )}
-                {r.status === "approved" && (
+                {r.status === "approved" && canApprove({ action: r.action, exceptionId: r.exception_id, amount: r.amount }) && (
                   <Button size="sm" variant="outline" onClick={() => onDecide(r.action_id, "done")}>Mark done</Button>
                 )}
               </td>
