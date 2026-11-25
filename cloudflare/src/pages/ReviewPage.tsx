@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, type ReviewDetail } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { inr } from "@/lib/format";
+import { inrExact } from "../../shared/money";
 import { AuditPanel } from "@/components/AuditPanel";
 import { useAuth } from "@/auth";
 
@@ -50,7 +50,7 @@ export default function ReviewPage() {
   const inv = asObj(data.investigator);
   const act = asObj(data.action);
   const aud = asObj(data.auditor);
-  const recAmt = Number(act.amount ?? data.item.amount ?? 0);
+  const recAmt = Number(data.item.amount ?? 0);
   const pending = data.item.review_status === "pending";
   return (
     <div className="space-y-6">
@@ -67,7 +67,12 @@ export default function ReviewPage() {
         <CardContent className="space-y-2 text-sm">
           <p className="font-mono text-xs text-muted truncate" title={decoded}>{decoded}</p>
           <p>{String(data.item.description ?? "—")}</p>
-          <p>Recommended action: <strong>{String(act.action ?? act.recommendation ?? "—")}</strong> · amount {inr(recAmt, true)}</p>
+          <p>Leakage: <strong className="tabular-nums">{inrExact(recAmt)}</strong></p>
+          <p>Recommended action: <strong>{String((() => {
+            const list = Array.isArray(act.actions) ? act.actions : [];
+            const first = list[0] && typeof list[0] === "object" && list[0] !== null ? (list[0] as Record<string, unknown>) : {};
+            return act.action ?? act.recommendation ?? first.type ?? "—";
+          })())}</strong></p>
           {data.item.case_id && <p>Linked case: <Link className="text-accent hover:underline" to="/cases">{String(data.item.case_id)}</Link></p>}
           <p>Investigate: <Link className="text-accent hover:underline" to={`/investigate/${encodeURIComponent(decoded)}`}>Open investigation</Link></p>
         </CardContent>

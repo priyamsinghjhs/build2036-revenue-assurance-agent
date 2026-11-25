@@ -1,3 +1,5 @@
+import { normalizeAmount } from "../shared/numbers";
+import { canonicalReviewAmount } from "../shared/reviewAmount";
 type RequestOpts = RequestInit & { timeoutMs?: number };
 
 async function request<T>(path: string, init?: RequestOpts): Promise<T> {
@@ -156,13 +158,15 @@ export const api = {
     const r = await request<{ pending: Record<string, unknown>[]; decided: Record<string, unknown>[]; count: number }>("/api/reviews");
     const map = (row: Record<string, unknown>): ReviewListItem => {
       const action = parseJson(row.action_json);
-      const amt = Number(action.amount ?? action.recommended_amount ?? 0);
+      const amt = row.amount != null && row.amount !== ""
+        ? normalizeAmount(row.amount)
+        : canonicalReviewAmount({ leakage: row.leakage, hasException: row.leakage != null, action });
       return {
         exception_id: String(row.exception_id),
-        area: String(row.domain ?? ""),
+        area: String(row.domain ?? row.area ?? ""),
         merchant_id: row.merchant_id == null ? null : String(row.merchant_id),
         review_status: String(row.review_status ?? "pending"),
-        amount: Number.isFinite(amt) ? amt : 0,
+        amount: amt,
         category: String(row.category ?? ""),
       };
     };
@@ -184,7 +188,13 @@ export const api = {
         category: String(ex.category ?? ""),
         merchant_id: ex.merchant_id == null ? null : String(ex.merchant_id),
         description: String(ex.category ? `${ex.category} · ${ex.ref_id ?? ""}`.trim() : rev.exception_id ?? ""),
-        amount: Number(ex.leakage ?? act.amount ?? 0),
+        amount: rev.amount != null && rev.amount !== ""
+          ? normalizeAmount(rev.amount)
+          : canonicalReviewAmount({
+              leakage: ex.leakage,
+              hasException: ex.leakage != null || ex.ref_id != null,
+              action: act,
+            }),
         facts: ex,
         case_id: r.case?.case_id ? String(r.case.case_id) : null,
         auditor_status: String(aud.verdict ?? aud.signoff ?? aud.status ?? "needs_review"),

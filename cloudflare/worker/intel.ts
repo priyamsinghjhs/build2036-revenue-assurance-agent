@@ -3,6 +3,7 @@ import { getDb, type AppDb } from "./pg";
 import type { Env } from "./types";
 import { startRun, runAgentStep, completeRun } from "./agentRunner";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
+import { canonicalReviewAmount, exceptionIdParts } from "../shared/reviewAmount";
 import { networkRisk } from "./network";
 import { compileExpectedFeeExpr, persistAndRunTests, loadRuleTests, validateFeeExpression } from "./sqlRule";
 import { listSuggestionDecisions } from "./auditor";
@@ -428,15 +429,27 @@ export async function updateCase(db: AppDb, id: string, patch: { status?: string
 export async function listReviews(db: AppDb) {
   const { results } = await db
     .prepare(
-      `SELECT DISTINCT ON (exception_id)
-              run_id, exception_id, domain, started_at, completed_at,
-              auditor_json, investigator_json, action_json, review_status, decision, decided_at, reviewer
-       FROM v_ra_review_queue
-       ORDER BY exception_id, started_at DESC`,
+      `SELECT DISTINCT ON (q.exception_id)
+              q.run_id, q.exception_id, q.domain, q.started_at, q.completed_at,
+              q.auditor_json, q.investigator_json, q.action_json, q.review_status,
+              q.decision, q.decided_at, q.reviewer,
+              e.merchant_id, e.category, e.leakage, e.expected_amount, e.actual_amount,
+              (e.ref_id IS NOT NULL) AS has_exception
+       FROM v_ra_review_queue q
+       LEFT JOIN ra_exception_rows e
+         ON e.area || ':' || e.category || ':' || e.ref_id = q.exception_id
+       ORDER BY q.exception_id, q.started_at DESC`,
     )
     .all<Record<string, unknown>>();
-  const pending = (results ?? []).filter((r) => r.review_status === "pending");
-  const decided = (results ?? []).filter((r) => r.review_status !== "pending");
+  const rows = (results ?? []).map((r) => {
+    const hasException = r.has_exception === true || r.has_exception === 1 || r.has_exception === "t" || r.leakage != null;
+    return {
+      ...r,
+      amount: canonicalReviewAmount({ leakage: r.leakage, hasException, action: r.action_json }),
+    };
+  });
+  const pending = rows.filter((r) => r.review_status === "pending");
+  const decided = rows.filter((r) => r.review_status !== "pending");
   return { pending, decided, count: pending.length };
 }
 
@@ -452,16 +465,36 @@ export async function getReview(db: AppDb, id: string) {
     .first<Record<string, unknown>>();
   if (!row) return null;
   const exId = String(row.exception_id);
-  const exception = await db
-    .prepare(
-      `SELECT area, category, ref_id, merchant_id, ts, expected_amount, actual_amount, leakage, scheme, method, status,
-              area||':'||category||':'||ref_id AS exception_id
-       FROM ra_exception_rows
-       WHERE area||':'||category||':'||ref_id = ? OR ref_id = ?
-       LIMIT 1`,
-    )
-    .bind(exId, exId.split(":").slice(-1)[0] ?? exId)
-    .first<Record<string, unknown>>();
+  const parts = exceptionIdParts(exId);
+  const exception = parts
+    ? await db
+        .prepare(
+          `SELECT area, category, ref_id, merchant_id, ts, expected_amount, actual_amount, leakage, scheme, method, status,
+                  area||':'||category||':'||ref_id AS exception_id
+           FROM ra_exception_rows
+           WHERE area = ? AND category = ? AND ref_id = ?
+           LIMIT 1`,
+        )
+        .bind(parts.area, parts.category, parts.ref_id)
+        .first<Record<string, unknown>>()
+    : await db
+        .prepare(
+          `SELECT area, category, ref_id, merchant_id, ts, expected_amount, actual_amount, leakage, scheme, method, status,
+                  area||':'||category||':'||ref_id AS exception_id
+           FROM ra_exception_rows
+           WHERE area||':'||category||':'||ref_id = ?
+           LIMIT 1`,
+        )
+        .bind(exId)
+        .first<Record<string, unknown>>();
+  if (row && exception) {
+    row.merchant_id = exception.merchant_id;
+    row.category = exception.category;
+    row.leakage = exception.leakage;
+    row.amount = canonicalReviewAmount({ leakage: exception.leakage, hasException: true, action: row.action_json });
+  } else if (row) {
+    row.amount = canonicalReviewAmount({ hasException: false, action: row.action_json });
+  }
   const linkedCase = await db
     .prepare("SELECT c.* FROM ra_cases c JOIN ra_case_exceptions e ON e.case_id=c.case_id WHERE e.exception_id=? LIMIT 1")
     .bind(exId)

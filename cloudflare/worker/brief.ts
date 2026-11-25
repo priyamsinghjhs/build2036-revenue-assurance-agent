@@ -1,7 +1,6 @@
 import type { ExecPayload } from "./executive";
 
-/** Keep in sync with EXPOSURE_AREAS in executive.ts — book leakage excludes these. */
-const EXPOSURE_AREAS = ["aml", "network_risk", "kyc", "success", "interfaces", "anomalies", "files"] as const;
+import { EXPOSURE_AREAS } from "../shared/bookLeakage";
 
 function inr(n: number): string {
   const abs = Math.abs(n);

@@ -1,5 +1,41 @@
 import type { AppDb } from "./pg";
 import { enrichExceptions } from "./ml/registry";
+import { normalizeAmount } from "../shared/numbers";
+import { BOOK_LEAKAGE_SQL, bookTotalsFromAreas, overlayLiveSummary, type LiveAreaLeakage } from "../shared/bookLeakage";
+
+export async function liveLeakageByArea(db: AppDb): Promise<Map<string, LiveAreaLeakage>> {
+  const { results } = await db
+    .prepare(
+      `SELECT area, COUNT(*)::int AS n, COALESCE(SUM(leakage),0)::float AS leakage
+       FROM ra_exception_rows
+       GROUP BY area`,
+    )
+    .all<LiveAreaLeakage>();
+  return new Map(
+    (results ?? []).map((r) => [
+      String(r.area),
+      { area: String(r.area), n: Number(r.n ?? 0), leakage: normalizeAmount(r.leakage) },
+    ]),
+  );
+}
+
+export async function liveAreaTrend(db: AppDb, area?: string) {
+  const sql = area
+    ? `SELECT SUBSTR(ts, 1, 10) AS day, COUNT(*)::int AS n, COALESCE(SUM(leakage),0)::float AS leakage
+       FROM ra_exception_rows WHERE area = ?
+       GROUP BY 1 ORDER BY 1`
+    : `SELECT SUBSTR(ts, 1, 10) AS day, COUNT(*)::int AS n, COALESCE(SUM(leakage),0)::float AS leakage
+       FROM ra_exception_rows WHERE ${BOOK_LEAKAGE_SQL}
+       GROUP BY 1 ORDER BY 1`;
+  const stmt = area ? db.prepare(sql).bind(area) : db.prepare(sql);
+  const { results } = await stmt.all<{ day: string; n: number; leakage: number }>();
+  return (results ?? []).map((r) => ({
+    day: String(r.day ?? ""),
+    n: Number(r.n ?? 0),
+    leakage: normalizeAmount(r.leakage),
+  }));
+}
+
 export type AreaId =
   | "authorization"
   | "scheme"
@@ -227,40 +263,25 @@ export async function summarizeArea(db: AppDb, area: AreaId): Promise<AreaSummar
     )
     .bind(area)
     .first<AreaSummary>();
-  if (!row) {
-    return {
-      area,
-      label: AREA_META[area].label,
-      matched: 0,
-      unmatched: 0,
-      variance: 0,
-      leakage: 0,
-      match_rate: 1,
-      exception_count: 0,
-    };
-  }
-  return {
-    ...row,
-    matched: Number(row.matched),
-    unmatched: Number(row.unmatched),
-    variance: Number(row.variance),
-    leakage: Number(row.leakage),
-    match_rate: Number(row.match_rate),
-    exception_count: Number(row.exception_count),
-  };
-}
-
-export async function summarizeAll(db: AppDb): Promise<AreaSummary[]> {
-  const { results } = await db
+  const liveOne = await db
     .prepare(
-      "SELECT area, label, matched, unmatched, variance, leakage, match_rate, exception_count FROM ra_area_summary",
+      `SELECT COUNT(*)::int AS n, COALESCE(SUM(leakage),0)::float AS leakage FROM ra_exception_rows WHERE area = ?`,
     )
-    .all<AreaSummary>();
-  const byArea = new Map((results ?? []).map((r) => [r.area, r]));
-  return AREA_IDS.map((area) => {
-    const row = byArea.get(area);
-    if (!row) {
-      return {
+    .bind(area)
+    .first<{ n: number; leakage: number }>();
+  const base: AreaSummary = row
+    ? {
+        ...row,
+        area,
+        matched: Number(row.matched),
+        unmatched: Number(row.unmatched),
+        variance: Number(row.variance),
+        leakage: Number(row.leakage),
+        match_rate: Number(row.match_rate),
+        exception_count: Number(row.exception_count),
+        label: row.label || AREA_META[area].label,
+      }
+    : {
         area,
         label: AREA_META[area].label,
         matched: 0,
@@ -270,17 +291,50 @@ export async function summarizeAll(db: AppDb): Promise<AreaSummary[]> {
         match_rate: 1,
         exception_count: 0,
       };
-    }
-    return {
-      ...row,
-      area,
-      matched: Number(row.matched),
-      unmatched: Number(row.unmatched),
-      variance: Number(row.variance),
-      leakage: Number(row.leakage),
-      match_rate: Number(row.match_rate),
-      exception_count: Number(row.exception_count),
-    };
+  const live = new Map<string, LiveAreaLeakage>();
+  if (liveOne && Number(liveOne.n) > 0) {
+    live.set(area, { area, n: Number(liveOne.n), leakage: normalizeAmount(liveOne.leakage) });
+  }
+  return overlayLiveSummary(base, live);
+}
+
+export async function summarizeAll(db: AppDb): Promise<AreaSummary[]> {
+  const [{ results }, live] = await Promise.all([
+    db.prepare(
+      "SELECT area, label, matched, unmatched, variance, leakage, match_rate, exception_count FROM ra_area_summary",
+    ).all<AreaSummary>(),
+    liveLeakageByArea(db),
+  ]);
+  const byArea = new Map((results ?? []).map((r) => [r.area, r]));
+  const ids = [...AREA_IDS] as AreaId[];
+  for (const area of live.keys()) {
+    if (!ids.includes(area as AreaId)) ids.push(area as AreaId);
+  }
+  return ids.map((area) => {
+    const row = byArea.get(area);
+    const base: AreaSummary = row
+      ? {
+          ...row,
+          area,
+          matched: Number(row.matched),
+          unmatched: Number(row.unmatched),
+          variance: Number(row.variance),
+          leakage: Number(row.leakage),
+          match_rate: Number(row.match_rate),
+          exception_count: Number(row.exception_count),
+          label: row.label || AREA_META[area]?.label || area,
+        }
+      : {
+          area,
+          label: AREA_META[area]?.label || area,
+          matched: 0,
+          unmatched: 0,
+          variance: 0,
+          leakage: 0,
+          match_rate: 1,
+          exception_count: 0,
+        };
+    return overlayLiveSummary(base, live);
   });
 }
 
@@ -292,10 +346,7 @@ export async function leakageByCategory(db: AppDb) {
 }
 
 export async function leakageTrend(db: AppDb) {
-  const { results } = await db
-    .prepare("SELECT day, leakage, n FROM ra_leakage_trend ORDER BY day")
-    .all<{ day: string; leakage: number; n: number }>();
-  return results ?? [];
+  return liveAreaTrend(db);
 }
 
 export async function moneyFlow(db: AppDb) {
@@ -327,35 +378,50 @@ export async function moneyFlow(db: AppDb) {
   };
 }
 
+function looksLikeDailyLeakageTrend(points: unknown): boolean {
+  if (!Array.isArray(points) || points.length === 0) return false;
+  return points.every(
+    (p) =>
+      p &&
+      typeof p === "object" &&
+      "day" in (p as object) &&
+      "leakage" in (p as object),
+  );
+}
+
 export async function areaSeries(db: AppDb, area: AreaId) {
   const row = await db
     .prepare("SELECT series_type, points FROM ra_area_series WHERE area = ?")
     .bind(area)
     .first<{ series_type: string; points: unknown }>();
   const points = !row?.points ? [] : typeof row.points === "string" ? JSON.parse(row.points) : row.points;
-  return { type: row?.series_type ?? "trend", points: points ?? [] };
+  const type = row?.series_type ?? "trend";
+  if (type === "trend" || looksLikeDailyLeakageTrend(points)) {
+    const live = await liveAreaTrend(db, area);
+    if (live.length) return { type: "trend", points: live };
+  }
+  return { type, points: points ?? [] };
 }
 
 export async function kpiCounts(db: AppDb) {
-  const row = await db
-    .prepare(
-      "SELECT total_leakage, exception_count, auth_count, merchant_count, match_rate, recovery_potential FROM ra_kpi_summary WHERE id = 1",
-    )
-    .first<{
-      total_leakage: number;
-      exception_count: number;
-      auth_count: number;
-      merchant_count: number;
-      match_rate: number;
-      recovery_potential: number;
-    }>();
+  const [row, areas, rec, wo] = await Promise.all([
+    db.prepare(
+      "SELECT auth_count, merchant_count, match_rate FROM ra_kpi_summary WHERE id = 1",
+    ).first<{ auth_count: number; merchant_count: number; match_rate: number }>(),
+    summarizeAll(db),
+    db.prepare("SELECT COALESCE(SUM(recovered),0)::float AS recovered FROM ra_chargebacks").first<{ recovered: number }>(),
+    db.prepare("SELECT COALESCE(SUM(amount),0)::float AS written_off FROM ra_writeoffs").first<{ written_off: number }>(),
+  ]);
+  const book = bookTotalsFromAreas(areas);
+  const recovered = Number(rec?.recovered ?? 0);
+  const writtenOff = Number(wo?.written_off ?? 0);
   return {
-    total_leakage: Number(row?.total_leakage ?? 0),
-    exception_count: Number(row?.exception_count ?? 0),
+    total_leakage: book.leakage,
+    exception_count: book.exception_count,
     auth_count: Number(row?.auth_count ?? 0),
     merchant_count: Number(row?.merchant_count ?? 0),
     match_rate: Number(row?.match_rate ?? 1),
-    recovery_potential: Number(row?.recovery_potential ?? 0),
+    recovery_potential: normalizeAmount(Math.max(0, book.leakage - recovered - writtenOff)),
   };
 }
 
