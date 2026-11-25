@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import {
   Bar,
   BarChart,
+  LabelList,
   CartesianGrid,
   Line,
   LineChart,
@@ -12,11 +13,12 @@ import {
   YAxis,
 } from "recharts";
 import { api, type AreaDetail, type ExceptionRow } from "@/api";
-import { chartMargin, TruncTick, WrappedLegend } from "@/components/ChartKit";
+import { CategoryTick, chartMargin, TruncTick, WrappedLegend, dayTickInterval } from "@/components/ChartKit";
 import { ExceptionTable } from "@/components/ExceptionTable";
 import { KpiCard } from "@/components/KpiCard";
 import { StatusBar } from "@/components/StatusBar";
 import { DomainCharts } from "@/components/DomainCharts";
+import { ShapBars } from "@/components/ShapBars";
 import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,14 +52,16 @@ const ROUTE_TO_AREA: Record<string, string> = {
   interfaces: "interfaces",
   aml: "aml",
   success: "success",
+  "false-declines": "false_declines",
 };
 
 const FEE_AREAS = ["gateway", "network", "partner"] as const;
 
 export default function AreaPage() {
   const { slug } = useParams();
-  const primary = ROUTE_TO_AREA[slug || ""] || "authorization";
-  const ids = slug === "fees" ? [...FEE_AREAS] : [primary];
+  const known = Boolean(slug && (slug in ROUTE_TO_AREA));
+  const primary = ROUTE_TO_AREA[slug || ""] || "";
+  const ids = slug === "fees" ? [...FEE_AREAS] : primary ? [primary] : [];
   const [pages, setPages] = useState<AreaDetail[]>([]);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<ExceptionRow | null>(null);
@@ -66,10 +70,11 @@ export default function AreaPage() {
   useEffect(() => {
     setPages([]);
     setError("");
+    if (!known) return;
     Promise.all(ids.map((id) => api.area(id)))
       .then(setPages)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [slug]);
+  }, [slug, known]);
 
   const exceptions = useMemo(() => {
     const rows = pages.flatMap((p) => p.exceptions);
@@ -80,6 +85,14 @@ export default function AreaPage() {
     });
   }, [pages, filters]);
 
+  if (!known) {
+    return (
+      <div className="space-y-3" data-testid="not-found">
+        <h1 className="text-2xl font-semibold tracking-tight text-ink">Page not found</h1>
+        <p className="text-sm text-muted">There is no revenue-assurance area at “{slug}”. Check the navigation or go back to the executive summary.</p>
+      </div>
+    );
+  }
   if (error) return <p className="text-danger">{error}</p>;
   if (!pages.length) return <p className="text-muted">Loading recon…</p>;
 
@@ -150,8 +163,16 @@ export default function AreaPage() {
               <div><dt className="text-[11px] uppercase text-muted">Actual</dt><dd className="tabular-nums">{inr(selected.actual_amount, true)}</dd></div>
               <div><dt className="text-[11px] uppercase text-muted">Leakage</dt><dd className="tabular-nums text-danger">{inr(selected.leakage, true)}</dd></div>
               <div><dt className="text-[11px] uppercase text-muted">When</dt><dd>{selected.ts ?? "—"}</dd></div>
+              {selected.score != null ? (
+                <div><dt className="text-[11px] uppercase text-muted">Model score</dt><dd className="tabular-nums">{Number(selected.score).toFixed(3)}{selected.model_id ? ` · ${selected.model_id.replace(/_/g, " ")}` : ""}</dd></div>
+              ) : null}
             </dl>
             <Button asChild>
+              {selected.top_factors && selected.top_factors.length > 0 ? (
+                <div className="sm:col-span-2">
+                  <ShapBars rows={selected.top_factors} title="Top SHAP drivers (path attribution)" />
+                </div>
+              ) : null}
               <a href={`/investigate/${encodeURIComponent(selected.exception_id)}`}>Run investigation</a>
             </Button>
           </div>
@@ -214,41 +235,50 @@ function AreaChartBlock({ series }: { series: { type: string; points: Record<str
           ? ["leakage"]
           : Object.keys(raw[0] || {}).filter((k) => k !== "day" && k !== "scheme" && k !== "method" && k !== "name" && k !== "n");
   const isBar = type !== "fx" && type !== "trend";
-  const longCats = isBar && (xKey === "scheme" || xKey === "name" || raw.length > 8);
+  const longCats = isBar && xKey !== "day" && (xKey === "scheme" || xKey === "name" || raw.length > 8);
   const Chart = isBar ? BarChart : LineChart;
   const colors = ["#1d4ed8", "#0f172a", "#64748b", "#b91c1c"];
-  const height = longCats ? Math.max(280, raw.length * 36) : 320;
-  const xInterval = raw.length <= 8 ? 0 : Math.max(1, Math.ceil(raw.length / 5) - 1);
+  const height = longCats ? Math.max(280, raw.length * 52) : 320;
+  const chartData = raw.map((row) =>
+    xKey === "day" ? row : { ...row, [xKey]: prettyCat(String((row as Record<string, unknown>)[xKey] ?? "")) },
+  );
   return (
     <div style={{ height }} className="min-h-72 w-full">
       <ResponsiveContainer width="100%" height="100%">
         <Chart
-          data={raw}
+          data={chartData}
           layout={longCats ? "vertical" : "horizontal"}
-          margin={{ ...chartMargin, left: longCats ? 12 : 8, bottom: longCats ? 8 : 48 }}
+          margin={{ ...chartMargin, left: longCats ? 8 : 8, right: isBar ? 56 : 16, bottom: longCats ? 8 : 48 }}
         >
           <CartesianGrid stroke="#1e293b" vertical={!longCats} horizontal={longCats ? false : true} />
           {longCats ? (
             <>
               <XAxis type="number" tick={<TruncTick maxChars={8} formatter={(v: unknown) => (type === "fx" ? String(v) : inr(Number(v), true))} />} />
-              <YAxis type="category" dataKey={xKey} width={88} interval={0} tick={<TruncTick textAnchor="end" maxChars={11} />} />
+              <YAxis type="category" dataKey={xKey} width={136} interval={0} tick={<CategoryTick textAnchor="end" maxCharsPerLine={16} />} />
             </>
           ) : (
             <>
               <XAxis
                 dataKey={xKey}
-                interval={xInterval}
+                interval={xKey === "day" ? dayTickInterval(raw.length) : 0}
+                minTickGap={xKey === "day" ? 12 : 0}
                 height={48}
-                tick={<TruncTick angle={-35} textAnchor="end" maxChars={8} />}
+                tick={xKey === "day"
+                  ? <TruncTick angle={-35} textAnchor="end" maxChars={10} formatter={(d: unknown) => String(d ?? "").slice(5)} />
+                  : <CategoryTick textAnchor="middle" maxCharsPerLine={10} />}
               />
               <YAxis width={56} tick={<TruncTick textAnchor="end" maxChars={8} formatter={(v: unknown) => (type === "fx" ? String(v) : inr(Number(v), true))} />} />
             </>
           )}
-          <Tooltip contentStyle={tooltipStyle} />
+          <Tooltip contentStyle={tooltipStyle} labelFormatter={(label) => String(label)} />
           {yKeys.length > 1 ? <WrappedLegend /> : null}
           {yKeys.map((k, i) =>
             isBar ? (
-              <Bar key={k} dataKey={k} fill={colors[i % colors.length]} radius={longCats ? [0, 4, 4, 0] : [4, 4, 0, 0]} />
+              <Bar key={k} dataKey={k} fill={colors[i % colors.length]} radius={longCats ? [0, 4, 4, 0] : [4, 4, 0, 0]}>
+                {yKeys.length === 1 && xKey !== "day" && raw.length <= 14 ? (
+                  <LabelList dataKey={k} position={longCats ? "right" : "top"} formatter={(v: unknown) => inr(Number(v), true)} style={{ fontSize: 10, fill: "#e2e8f0" }} />
+                ) : null}
+              </Bar>
             ) : (
               <Line key={k} type="monotone" dataKey={k} stroke={colors[i % colors.length]} dot={false} />
             ),

@@ -1,0 +1,7 @@
+merchant_txn_1d/7d, merchant_amt_1d/7d — velocity windows
+merchant_approval_7d, merchant_decline_7d, merch_amt_z — merchant baselines
+mcc_approval, mcc_spend_ratio — MCC spend ratios
+is_retry, retry_n_30m — decline/retry patterns
+fee_ratio_dev, fx_markup_dev — fee and FX markup deviations
+acquirer_approval, scheme_approval, method_approval — issuer/route baselines
+merchant_cb_rate, graph_risk, shared_device_n, ring_flag, loop_flag — graph + CB history

@@ -6,6 +6,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,8 +14,9 @@ import {
 } from "recharts";
 import { Printer } from "lucide-react";
 import { api, type Executive } from "@/api";
-import { chartMargin, TruncTick } from "@/components/ChartKit";
+import { CategoryTick, chartMargin, TruncTick } from "@/components/ChartKit";
 import { KpiCard } from "@/components/KpiCard";
+import { ActionNeededCard, ExecHeroTile } from "@/components/ExecHeroTile";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CHART, tooltipStyle } from "@/lib/chartTheme";
@@ -45,6 +47,38 @@ export default function ExecutivePage() {
   const comparePct = data.period_compare.prior ? data.period_compare.delta / data.period_compare.prior : 0;
   const maxWater = Math.max(...data.waterfall.map((s) => Math.abs(s.value)), 1);
   const maxFunnel = Math.max(...data.funnel.map((s) => s.amount), 1);
+  const leakTrend = data.trend.map((d) => ({ day: d.day.slice(5), value: d.leakage }));
+  const exceptionTrend = data.trend.map((d) => ({ day: d.day.slice(5), value: d.n }));
+  const leakDelta = data.period_compare;
+  const recoveryStages = [
+    { name: "Identified", amount: k.leakage, kind: "total" as const },
+    { name: "Recovered", amount: k.recovered, kind: "ok" as const },
+    { name: "Written off", amount: k.written_off, kind: "muted" as const },
+    { name: "At risk", amount: k.recoverable, kind: "leak" as const },
+  ];
+  const maxRecovery = Math.max(...recoveryStages.map((s) => s.amount), 1);
+  const recoveryPct = k.leakage ? Math.min(100, (k.recovered / k.leakage) * 100) : 0;
+  const actions = [
+    data.intelligence?.reviews_pending
+      ? { title: "Reviews waiting", value: String(data.intelligence.reviews_pending), detail: "Auditor items need a human decision", to: "/review", tone: "warn" as const }
+      : null,
+    data.governance?.unapproved_changes
+      ? { title: "Unapproved config", value: String(data.governance.unapproved_changes), detail: `Impact ${inr(data.governance.unapproved_impact, true)}`, to: "/config", tone: "leak" as const }
+      : null,
+    data.intelligence?.cases_overdue
+      ? { title: "Overdue cases", value: String(data.intelligence.cases_overdue), detail: `${data.intelligence.cases_open} open cases`, to: "/cases", tone: "warn" as const }
+      : null,
+    data.governance?.controls_fail
+      ? { title: "Controls failing", value: String(data.governance.controls_fail), detail: `${data.governance.controls_pass}/${data.governance.controls_total} passing`, to: "/controls", tone: "warn" as const }
+      : null,
+    data.intelligence?.files_missing
+      ? { title: "Missing files", value: String(data.intelligence.files_missing), detail: "Operational — not booked leakage", to: "/files", tone: "warn" as const }
+      : null,
+    data.intelligence?.ai_unverified
+      ? { title: "Unverified AI outputs", value: String(data.intelligence.ai_unverified), detail: "Routed to the review queue", to: "/agents", tone: "warn" as const }
+      : null,
+  ].filter((x): x is NonNullable<typeof x> => Boolean(x));
+
 
   return (
     <div className="space-y-6">
@@ -72,27 +106,173 @@ export default function ExecutivePage() {
         </p>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Revenue processed" value={inr(k.revenue, true)} hint={`${k.auth_count.toLocaleString("en-IN")} authorizations`} />
-        <KpiCard label="Total leakage" value={inr(k.leakage, true)} hint={`${pct(k.leakage_pct)} of revenue`} tone="leak" />
-        <KpiCard label="Match rate" value={pct(k.match_rate)} hint={`${k.exception_count} open exceptions`} tone="ok" />
-        <KpiCard
-          label="Recoverable"
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="exec-hero">
+        <ExecHeroTile
+          label="Revenue processed"
+          value={inr(k.revenue, true)}
+          hint={`${k.auth_count.toLocaleString("en-IN")} authorizations · match ${pct(k.match_rate)}`}
+        />
+        <ExecHeroTile
+          label="Total leakage"
+          value={inr(k.leakage, true)}
+          hint={`${pct(k.leakage_pct)} of revenue`}
+          tone="leak"
+          spark={leakTrend}
+          delta={
+            leakDelta.prior
+              ? {
+                  display: `${leakDelta.delta >= 0 ? "+" : "−"}${inr(Math.abs(leakDelta.delta), true)} vs first half of October`,
+                  up: leakDelta.delta > 0,
+                }
+              : undefined
+          }
+        />
+        <ExecHeroTile
+          label="Open exceptions"
+          value={k.exception_count.toLocaleString("en-IN")}
+          hint="Book count — exposure areas excluded"
+          tone="warn"
+          spark={exceptionTrend}
+          testId="exec-exception-count"
+        />
+        <ExecHeroTile
+          label="At risk"
           value={inr(k.recoverable, true)}
           hint={`Recovered ${inr(k.recovered, true)} · written off ${inr(k.written_off, true)}`}
           tone="warn"
         />
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <KpiCard label="Recovered" value={inr(k.recovered, true)} tone="ok" />
-        <KpiCard label="Written off" value={inr(k.written_off, true)} />
-        <KpiCard
-          label="SLA ageing"
-          value={data.ageing[0] ? `${data.ageing[0].n}` : "0"}
-          hint={data.ageing.map((a) => `${a.bucket}: ${a.n}`).join(" · ") || "No aged exceptions"}
-        />
+      <div className="grid gap-4 lg:grid-cols-2" data-testid="exec-recovery">
+        <Card>
+          <CardHeader>
+            <CardTitle>Leakage waterfall</CardTitle>
+            <CardDescription>Identified leakage, recovered, written off, and what remains at risk</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2" data-testid="exec-waterfall-recovery">
+              {recoveryStages.map((s) => (
+                <div key={s.name} className="min-w-0">
+                  <div className="mb-1 flex items-baseline justify-between gap-3 text-xs">
+                    <span className="font-medium text-ink">{s.name}</span>
+                    <span className={cn("tabular-nums", s.kind === "leak" ? "text-danger" : s.kind === "ok" ? "text-success" : "text-ink")}>
+                      {inr(s.amount, true)}
+                    </span>
+                  </div>
+                  <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className={cn(
+                        "h-full rounded-full",
+                        s.kind === "leak" ? "bg-danger" : s.kind === "ok" ? "bg-success" : s.kind === "muted" ? "bg-slate-400" : "bg-accent",
+                      )}
+                      style={{ width: `${Math.max(4, Math.round((s.amount / maxRecovery) * 100))}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Recovery progress</CardTitle>
+            <CardDescription>
+              {inr(k.recovered, true)} recovered of {inr(k.leakage, true)} identified
+            </CardDescription>
+          </CardHeader>
+          <CardContent data-testid="exec-recovery-progress">
+            <div className="mb-2 flex items-baseline justify-between text-sm">
+              <span className="font-semibold tabular-nums text-ink">{recoveryPct.toFixed(1)}%</span>
+              <span className="text-xs text-muted">{inr(k.recoverable, true)} still at risk</span>
+            </div>
+            <div className="h-4 overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full rounded-full bg-success" style={{ width: `${Math.max(2, recoveryPct)}%` }} />
+            </div>
+            <dl className="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+              <div>
+                <dt className="text-muted">Recovered</dt>
+                <dd className="font-semibold tabular-nums text-success">{inr(k.recovered, true)}</dd>
+              </div>
+              <div>
+                <dt className="text-muted">Written off</dt>
+                <dd className="font-semibold tabular-nums">{inr(k.written_off, true)}</dd>
+              </div>
+              <div>
+                <dt className="text-muted">Ageing 61+ days</dt>
+                <dd className="font-semibold tabular-nums">{data.ageing.find((a) => a.bucket === "61+ days")?.n ?? 0}</dd>
+              </div>
+            </dl>
+          </CardContent>
+        </Card>
       </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Top 5 risk drivers</CardTitle>
+            <CardDescription>Book leakage only — compliance exposure is in the next panel</CardDescription>
+          </CardHeader>
+          <CardContent data-testid="exec-top-drivers">
+            <div className="space-y-2">
+              {data.top_drivers.map((d) => (
+                <Link key={`${d.area}-${d.category}`} to={areaPath(d.area)} className="block min-w-0">
+                  <div className="mb-1 flex items-baseline justify-between gap-3 text-xs">
+                    <span className="min-w-0 truncate font-medium text-ink" title={`${prettyCat(d.category)} · ${d.area}`}>
+                      {prettyCat(d.category)}
+                    </span>
+                    <span className="shrink-0 tabular-nums text-danger">{inr(d.leakage, true)} · {d.n}</span>
+                  </div>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-danger"
+                      style={{ width: `${Math.max(4, Math.round((d.leakage / Math.max(data.top_drivers[0]?.leakage ?? 1, 1)) * 100))}%` }}
+                    />
+                  </div>
+                </Link>
+              ))}
+              {!data.top_drivers.length && <p className="text-sm text-muted">No book-leakage drivers in this period.</p>}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Compliance exposure</CardTitle>
+            <CardDescription>AML, KYC and operational exposure — not included in book leakage or the open-exception count</CardDescription>
+          </CardHeader>
+          <CardContent data-testid="exec-compliance">
+            <div className="space-y-2">
+              {(data.compliance_exposure ?? []).map((d) => (
+                <Link key={`${d.area}-${d.category}`} to={areaPath(d.area)} className="block min-w-0">
+                  <div className="mb-1 flex items-baseline justify-between gap-3 text-xs">
+                    <span className="min-w-0 truncate font-medium text-ink" title={`${prettyCat(d.category)} · ${d.area}`}>
+                      {prettyCat(d.category)}
+                    </span>
+                    <span className="shrink-0 tabular-nums text-warning">{inr(d.exposure, true)} · {d.n}</span>
+                  </div>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-warning"
+                      style={{ width: `${Math.max(4, Math.round((d.exposure / Math.max((data.compliance_exposure ?? [])[0]?.exposure ?? 1, 1)) * 100))}%` }}
+                    />
+                  </div>
+                </Link>
+              ))}
+              {!(data.compliance_exposure ?? []).length && <p className="text-sm text-muted">No compliance exposure rows.</p>}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {actions.length > 0 && (
+        <section data-testid="exec-actions">
+          <h2 className="mb-2 text-sm font-semibold text-ink">Actions needed</h2>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {actions.map((a) => (
+              <ActionNeededCard key={a.title} {...a} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {data.governance && (
         <Card>
@@ -219,6 +399,55 @@ export default function ExecutivePage() {
               <Link to="/risks" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Risk library</Link>
               <Link to="/files" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">File completeness</Link>
               <Link to="/ingestion" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">File ingestion</Link>
+              <Link to="/models" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Model intelligence</Link>
+              <Link to="/false-declines" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">False declines</Link>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {data.intelligence && data.intelligence.models_version && data.intelligence.models_version !== "untrained" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Model intelligence</CardTitle>
+            <CardDescription>
+              False-decline recovery is book leakage (lost revenue, recoverable). Chargeback exposure is a high-risk slice (p ≥ 0.55), not a second book-leakage area.
+              Isolation-forest flags sit with the anomaly sensors. Retry recovery is a fee-aware simulation, not live traffic.
+              Metrics are on the synthetic October book ({data.intelligence.models_version}).
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard
+                label="False-decline recovery"
+                value={inr(data.intelligence.false_decline_recovery ?? 0, true)}
+                hint={`${data.intelligence.false_decline_n ?? 0} soft declines · book leakage`}
+                tone="leak"
+              />
+              <KpiCard
+                label="Chargeback high-risk exposure"
+                value={inr(data.intelligence.chargeback_exposure ?? 0, true)}
+                hint="Not booked leakage"
+                tone="warn"
+              />
+              <KpiCard
+                label="Isolation-forest open"
+                value={String(data.intelligence.iforest_open ?? 0)}
+                hint={`Open anomalies ${data.intelligence.anomaly_open}`}
+                tone="warn"
+              />
+              <KpiCard
+                label="Retry recovered (sim)"
+                value={inr(data.intelligence.retry_recovered ?? 0, true)}
+                hint={`Uplift ${pct(data.intelligence.retry_uplift ?? 0)}`}
+                tone="ok"
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              <Link to="/models" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Model cards &amp; SHAP</Link>
+              <Link to="/false-declines" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">False declines</Link>
+              <Link to="/anomalies" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Anomalies</Link>
+              <Link to="/routing" className="rounded-full border border-line px-2 py-1 hover:bg-slate-50">Retry simulation</Link>
             </div>
           </CardContent>
         </Card>
@@ -234,7 +463,7 @@ export default function ExecutivePage() {
         </CardHeader>
         <CardContent>
           {data.narrative?.bullets?.length ? (
-            <ul className="space-y-2 text-sm leading-relaxed text-ink">
+            <ul className="space-y-2 text-sm leading-relaxed text-ink" data-testid="exec-brief">
               {data.narrative.bullets.map((b) => (
                 <li key={b} className="flex gap-2">
                   <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />
@@ -251,7 +480,7 @@ export default function ExecutivePage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Leakage waterfall</CardTitle>
+            <CardTitle>Leakage by domain</CardTitle>
             <CardDescription>Gross volume through leakage by domain to net after leakage</CardDescription>
           </CardHeader>
           <CardContent>
@@ -291,7 +520,7 @@ export default function ExecutivePage() {
           <CardContent>
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={data.trend} margin={{ ...chartMargin, bottom: 36 }}>
+                <AreaChart data={data.trend} margin={{ ...chartMargin, left: 16, bottom: 44 }}>
                   <CartesianGrid stroke={CHART.grid} vertical={false} />
                   <XAxis dataKey="day" interval={Math.max(1, Math.ceil(data.trend.length / 5) - 1)} height={48} tick={<TruncTick angle={-35} textAnchor="end" maxChars={8} formatter={(d) => String(d ?? "").slice(5)} />} />
                   <YAxis width={56} tick={<TruncTick textAnchor="end" maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
@@ -311,14 +540,30 @@ export default function ExecutivePage() {
             <CardDescription>Five largest gap types in the book</CardDescription>
           </CardHeader>
           <CardContent>
-            <div style={{ height: Math.max(240, data.top_drivers.length * 44) }}>
+            <div style={{ height: Math.max(280, data.top_drivers.length * 56) }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data.top_drivers.map((d) => ({ ...d, name: prettyCat(d.category) }))} layout="vertical" margin={{ ...chartMargin, left: 8 }}>
+                <BarChart
+                  data={data.top_drivers.map((d) => ({ ...d, name: prettyCat(d.category) }))}
+                  layout="vertical"
+                  margin={{ ...chartMargin, left: 4, right: 64 }}
+                >
                   <CartesianGrid stroke={CHART.grid} horizontal={false} />
                   <XAxis type="number" tick={<TruncTick maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
-                  <YAxis type="category" dataKey="name" width={110} interval={0} tick={<TruncTick textAnchor="end" maxChars={16} />} />
-                  <Tooltip contentStyle={tooltipStyle} formatter={(v) => inr(Number(v), true)} />
-                  <Bar dataKey="leakage" fill={CHART.leak} radius={[0, 4, 4, 0]} name="Leakage" />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    width={136}
+                    interval={0}
+                    tick={<CategoryTick textAnchor="end" maxCharsPerLine={16} />}
+                  />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(v) => inr(Number(v), true)}
+                    labelFormatter={(label) => String(label)}
+                  />
+                  <Bar dataKey="leakage" fill={CHART.leak} radius={[0, 4, 4, 0]} name="Leakage">
+                    <LabelList dataKey="leakage" position="right" formatter={(v) => inr(Number(v), true)} style={{ fontSize: 10, fill: "#0f172a" }} />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -326,6 +571,43 @@ export default function ExecutivePage() {
         </Card>
 
         <Card>
+          <CardHeader>
+            <CardTitle>Compliance exposure</CardTitle>
+            <CardDescription>KYC, AML, network risk, interfaces, files and similar ops/risk amounts — not part of book leakage</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div style={{ height: Math.max(280, Math.max(data.compliance_exposure?.length ?? 0, 1) * 56) }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={(data.compliance_exposure ?? []).map((d) => ({ ...d, name: prettyCat(d.category), leakage: d.exposure }))}
+                  layout="vertical"
+                  margin={{ ...chartMargin, left: 4, right: 64 }}
+                >
+                  <CartesianGrid stroke={CHART.grid} horizontal={false} />
+                  <XAxis type="number" tick={<TruncTick maxChars={8} formatter={(v) => inr(Number(v), true)} />} />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    width={136}
+                    interval={0}
+                    tick={<CategoryTick textAnchor="end" maxCharsPerLine={16} />}
+                  />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(v) => inr(Number(v), true)}
+                    labelFormatter={(label) => String(label)}
+                  />
+                  <Bar dataKey="leakage" fill="#7c3aed" radius={[0, 4, 4, 0]} name="Exposure">
+                    <LabelList dataKey="leakage" position="right" formatter={(v) => inr(Number(v), true)} style={{ fontSize: 10, fill: "#0f172a" }} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
           <CardHeader>
             <CardTitle>Recovery pipeline</CardTitle>
             <CardDescription>From recoverable leakage through proposed, approved, recovered and write-off</CardDescription>
@@ -352,7 +634,6 @@ export default function ExecutivePage() {
             </div>
           </CardContent>
         </Card>
-      </div>
 
       <Card>
         <CardHeader>

@@ -1,0 +1,42 @@
+[
+  {
+    "name": "planted-wrong-amount",
+    "agent": "investigator",
+    "kind": "planted_hallucination",
+    "expected_score": "FAIL",
+    "input": "Investigate exception CAP00216. Use only the context.",
+    "context": "Exception scheme:missing_scheme_settlement:CAP00216 merchant MER004 leakage 18450.00 expected 185000 actual 166550 category missing_scheme_settlement October 2026",
+    "answer": "Root cause is a missing scheme settlement file for CAP00216 at merchant MER004, leaving leakage of 50000.00 in October 2026.",
+    "comment": "Wrong rupee amount: 50000.00 is not in the document; the leakage is 18450.00."
+  },
+  {
+    "name": "planted-wrong-id",
+    "agent": "action",
+    "kind": "planted_hallucination",
+    "expected_score": "FAIL",
+    "input": "Propose an action with amount.",
+    "context": "Exception CAP00216 leakage 18450.00 merchant MER004. Recommended type recover.",
+    "answer": "{\"actions\":[{\"type\":\"recover\",\"target\":\"MER999\",\"amount\":18450,\"currency\":\"INR\",\"rationale\":\"Recover missing scheme settlement leakage of 18450.00\"}]}",
+    "comment": "Wrong merchant ID: MER999 is not in the document; the merchant is MER004."
+  },
+  {
+    "name": "planted-fabricated-bps",
+    "agent": "contracts_rag",
+    "kind": "planted_hallucination",
+    "expected_score": "FAIL",
+    "input": "What is the Visa consumer scheme fee after the October 2026 bulletin?",
+    "context": "Visa India scheme fee bulletin, effective 15 October 2026: The Visa consumer scheme fee is revised from 12 bps to 14 bps of gross settled amount. Debit scheme fee is unchanged at 8 bps.",
+    "answer": "The Visa consumer scheme fee remains 12 bps of gross settled amount after the October 2026 bulletin.",
+    "comment": "Fabricated / stale clause: the document revises the fee from 12 bps to 14 bps. Both numbers appear in the document, so GroundedNumbers may still pass."
+  },
+  {
+    "name": "planted-wrong-fee-cap",
+    "agent": "contracts_rag",
+    "kind": "planted_hallucination",
+    "expected_score": "FAIL",
+    "input": "What fee applies to a 50,000 commercial credit transaction?",
+    "context": "Schedule A: UPI P2M Transactions: Zero (0.00) MDR fee. Commercial Credit Cards: 0.35% for amounts strictly greater than 10,000.00, capped at 150.00. Amounts <= 10,000.00 incur a flat fee of 25.00.",
+    "answer": "The fee is 0.35% capped at 250.00, so expected_fee is 250.00.",
+    "comment": "Wrong cap: 250.00 is not in the document; the cap is 150.00."
+  }
+]

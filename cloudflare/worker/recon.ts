@@ -1,4 +1,5 @@
 import type { AppDb } from "./pg";
+import { enrichExceptions } from "./ml/registry";
 export type AreaId =
   | "authorization"
   | "scheme"
@@ -31,7 +32,8 @@ export type AreaId =
   | "contracts"
   | "files"
   | "anomalies"
-  | "clearing";
+  | "clearing"
+  | "false_declines";
 
 export const AREA_META: Record<
   AreaId,
@@ -69,6 +71,7 @@ export const AREA_META: Record<
   files: { label: "File completeness", group: "lifecycle", blurb: "Missing and out-of-sequence scheme, bank and APM daily files" },
   anomalies: { label: "Anomaly sensors", group: "risk", blurb: "Statistical z-score and EWMA detectors on latency, fee ratios, approval rates, refunds and hop volumes" },
   clearing: { label: "Clearing & ingestion", group: "lifecycle", blurb: "Canonical settlement rows from camt.053, NPCI UPI, Mastercard IPM and Visa BASE II, with deterministic fee checks" },
+  false_declines: { label: "False declines", group: "lifecycle", blurb: "Soft declines scored as recoverable lost revenue. Leakage is amount × model score (or a conservative rule when unscored)." },
 };
 
 export const AREA_IDS = Object.keys(AREA_META) as AreaId[];
@@ -89,6 +92,9 @@ export type ExceptionRow = {
   scheme: string | null;
   currency: string | null;
   severity: "high" | "medium" | "low";
+  score?: number | null;
+  top_factors?: unknown;
+  model_id?: string | null;
 };
 
 export function severityOf(leakage: number, category: string): "high" | "medium" | "low" {
@@ -140,6 +146,9 @@ export function severityOf(leakage: number, category: string): "high" | "medium"
     "network_known_bad",
     "network_shared_account",
     "interface_drop",
+    "false_decline_soft",
+    "false_decline_timeout",
+    "false_decline_planted",
   ]);
   if (highCats.has(category) || leakage >= 5000) return "high";
   if (leakage >= 1000) return "medium";
@@ -180,7 +189,8 @@ export async function listExceptions(
     : "SELECT * FROM ra_exception_rows ORDER BY leakage DESC LIMIT ?";
   const stmt = area ? db.prepare(sql).bind(area, limit) : db.prepare(sql).bind(limit);
   const { results } = await stmt.all<Record<string, unknown>>();
-  return (results ?? []).map(mapException);
+  const mapped = (results ?? []).map(mapException);
+  return enrichExceptions(db, mapped) as Promise<ExceptionRow[]>;
 }
 
 export async function getException(db: AppDb, exceptionId: string): Promise<ExceptionRow | null> {
@@ -194,7 +204,9 @@ export async function getException(db: AppDb, exceptionId: string): Promise<Exce
     .bind(area, category, refId)
     .all<Record<string, unknown>>();
   const row = results?.[0];
-  return row ? mapException(row) : null;
+  if (!row) return null;
+  const [enriched] = await enrichExceptions(db, [mapException(row)]);
+  return enriched as ExceptionRow;
 }
 
 export type AreaSummary = {

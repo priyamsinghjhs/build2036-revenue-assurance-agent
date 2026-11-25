@@ -33,6 +33,7 @@ export function areaPath(area: string): string {
     clearing: "/ingestion",
     anomalies: "/anomalies",
     controls: "/controls",
+    false_declines: "/false-declines",
     trace: "/trace",
   };
   return map[area] ?? "/";
@@ -80,4 +81,9 @@ export const TITLES: Record<string, string> = {
   "/files": "File completeness",
   "/ingestion": "File ingestion",
   "/review": "Review queue",
+  "/models": "Model intelligence",
+  "/open-data": "Open data sources",
+  "/settings": "Settings",
+  "/settings/data-sources": "Data sources",
+  "/false-declines": "False declines",
 };

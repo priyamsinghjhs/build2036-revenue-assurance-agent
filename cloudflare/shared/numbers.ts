@@ -52,3 +52,9 @@ export function normalizeAmount(value: unknown): number {
   if (n == null) return 0;
   return Math.round(n * 100) / 100;
 }
+
+
+/** Display confidence as a clamped integer percent, e.g. 70% — never 7000%. */
+export function formatConfidence(value: unknown): string {
+  return `${normalizeConfidence(value)}%`;
+}

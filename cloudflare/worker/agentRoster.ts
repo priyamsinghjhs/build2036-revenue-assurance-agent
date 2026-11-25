@@ -24,6 +24,7 @@ export type AgentId =
   | "recon_network"
   | "recon_success"
   | "recon_files"
+  | "recon_false_declines"
   | "contract_extract"
   | "gap_detection"
   | "investigator"
@@ -61,6 +62,7 @@ export const AGENT_ROSTER: {
   { id: "recon_aml", name: "AML / fraud agent", role: "Interprets rule-based structuring, refund abuse, round-trip, velocity and dormant-burst flags", kind: "reconciliation", domain: "aml" },
   { id: "recon_network", name: "Network risk agent", role: "Interprets graph scores: shared accounts or devices, cycles, known-bad proximity, changed accounts", kind: "reconciliation", domain: "network_risk" },
   { id: "recon_files", name: "File completeness agent", role: "Interprets missing and out-of-sequence scheme, bank and APM files", kind: "reconciliation", domain: "files" },
+  { id: "recon_false_declines", name: "False-decline agent", role: "Interprets scored soft declines as recoverable lost revenue and surfaces SHAP drivers", kind: "reconciliation", domain: "false_declines" },
   { id: "contract_extract", name: "Contract extraction agent", role: "Extracts structured rules from contracts with citations for human approval", kind: "reconciliation", domain: "contracts" },
   { id: "recon_success", name: "Success-rate agent", role: "Interprets approval and decline patterns by channel, acquirer, APM and EMI", kind: "reconciliation", domain: "success" },
   { id: "gap_detection", name: "Gap / Leakage Detection", role: "Prioritises leakage themes across domains", kind: "gap" },
@@ -70,7 +72,7 @@ export const AGENT_ROSTER: {
 ];
 
 const ON_DEMAND_RECON: AgentId[] = [
-  "recon_config","recon_tax","recon_kyc","recon_interfaces","recon_aml","recon_network","recon_success","recon_files","contract_extract",
+  "recon_config","recon_tax","recon_kyc","recon_interfaces","recon_aml","recon_network","recon_success","recon_files","recon_false_declines","contract_extract",
 ];
 /** Full roster minus on-demand governance/risk recon agents, to stay within the free neuron budget.
  *  Run those domains individually (orchestrator + one recon + gap + investigator + action + auditor). */
@@ -109,6 +111,7 @@ export const AGENT_GRAPH_EDGES: { source: AgentId; target: AgentId }[] = [
   { source: "orchestrator", target: "recon_network" },
   { source: "orchestrator", target: "recon_success" },
   { source: "orchestrator", target: "recon_files" },
+  { source: "orchestrator", target: "recon_false_declines" },
   { source: "orchestrator", target: "contract_extract" },
   { source: "recon_authorization", target: "gap_detection" },
   { source: "recon_scheme", target: "gap_detection" },
@@ -134,6 +137,7 @@ export const AGENT_GRAPH_EDGES: { source: AgentId; target: AgentId }[] = [
   { source: "recon_network", target: "gap_detection" },
   { source: "recon_success", target: "gap_detection" },
   { source: "recon_files", target: "gap_detection" },
+  { source: "recon_false_declines", target: "gap_detection" },
   { source: "contract_extract", target: "gap_detection" },
   { source: "gap_detection", target: "investigator" },
   { source: "investigator", target: "action" },

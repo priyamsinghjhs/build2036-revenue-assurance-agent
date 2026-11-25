@@ -11,8 +11,9 @@ import { Play, RefreshCw } from "lucide-react";
 import { api, type ActionRow, type AutomationLog, type EvalQuality, type LatestRun, type Roster } from "@/api";
 import { SeverityBadge, StatusDot } from "@/components/SeverityBadge";
 import { Button } from "@/components/ui/button";
-import { inr, prettyCat, pct } from "@/lib/format";
+import { formatConfidence, inr, prettyCat, pct } from "@/lib/format";
 import { publicErrorMessage } from "../../shared/errors";
+import { useAuth } from "@/auth";
 
 const DOMAINS = [
   { id: "all", label: "Run all" },
@@ -43,7 +44,29 @@ const DOMAINS = [
 
 type StepStatus = "idle" | "running" | "done" | "cached" | "error";
 
+
+function batchAgentSequence(sequence: string[]): string[][] {
+  const batches: string[][] = [];
+  let i = 0;
+  if (sequence[0] === "orchestrator") {
+    batches.push(["orchestrator"]);
+    i = 1;
+  }
+  const recon: string[] = [];
+  while (i < sequence.length && sequence[i].startsWith("recon_")) {
+    recon.push(sequence[i]);
+    i += 1;
+  }
+  for (let j = 0; j < recon.length; j += 4) batches.push(recon.slice(j, j + 4));
+  while (i < sequence.length) {
+    batches.push([sequence[i]]);
+    i += 1;
+  }
+  return batches;
+}
+
 export default function AgentsPage() {
+  const { can } = useAuth();
   const [roster, setRoster] = useState<Roster | null>(null);
   const [latest, setLatest] = useState<LatestRun | null>(null);
   const [actions, setActions] = useState<ActionRow[]>([]);
@@ -76,7 +99,7 @@ export default function AgentsPage() {
   }, []);
 
   useEffect(() => {
-    api.evalQuality().then(setQuality).catch(() => undefined);
+    if (can("audit")) api.evalQuality().then(setQuality).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -126,18 +149,36 @@ export default function AgentsPage() {
       for (const id of started.sequence) nextStatus[id] = "idle";
       setStatus({ ...nextStatus });
       setOutputs({});
-      for (const agentId of started.sequence) {
-        setActive(agentId);
-        setStatus((s) => ({ ...s, [agentId]: "running" }));
-        const step = await api.step({
-          run_id: started.run_id,
-          agent_id: agentId,
-          scope: domain,
-          domain: domain === "all" ? "" : domain,
+      for (const batch of batchAgentSequence(started.sequence)) {
+        setActive(batch[0] ?? "");
+        setStatus((s) => {
+          const next = { ...s };
+          for (const agentId of batch) next[agentId] = "running";
+          return next;
         });
-        nextOut[agentId] = step.output;
-        setOutputs((o) => ({ ...o, [agentId]: step.output }));
-        setStatus((s) => ({ ...s, [agentId]: "done" }));
+        const steps = await Promise.all(
+          batch.map((agentId) =>
+            api.step({
+              run_id: started.run_id,
+              agent_id: agentId,
+              scope: domain,
+              domain: domain === "all" ? "" : domain,
+            }).then((step) => ({ agentId, step })),
+          ),
+        );
+        for (const { agentId, step } of steps) {
+          nextOut[agentId] = step.output;
+        }
+        setOutputs((o) => {
+          const merged = { ...o };
+          for (const { agentId, step } of steps) merged[agentId] = step.output;
+          return merged;
+        });
+        setStatus((s) => {
+          const next = { ...s };
+          for (const { agentId } of steps) next[agentId] = "done";
+          return next;
+        });
       }
       await api.complete(started.run_id);
       const act = await api.actions();
@@ -217,10 +258,14 @@ export default function AgentsPage() {
           <p className="text-sm text-muted">Daily cron runs recon, investigates the top exception, and queues actions. Approve or reject below.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button disabled={autoBusy || busy} onClick={runNow}>
+          {can("automation") ? (
+          <Button disabled={autoBusy || busy} onClick={runNow} data-testid="run-now">
             {autoBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             {autoBusy ? "Running…" : "Run now"}
           </Button>
+          ) : null}
+          {can("recon_run") ? (
+          <>
           <select
             className="h-9 rounded-lg border border-line bg-white px-2 text-sm"
             value={domain}
@@ -237,15 +282,20 @@ export default function AgentsPage() {
           <Button variant="outline" disabled={busy || autoBusy} onClick={runPipeline}>
             {busy ? "Running…" : "Advanced pipeline"}
           </Button>
+          </>
+          ) : null}
         </div>
       </header>
       {error && <p className="text-sm text-danger">{error}</p>}
-      {quality && (
+      {quality && can("audit") && (
         <section className="rounded-xl border border-line bg-white p-4">
           <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold text-ink">AI quality</h2>
               <p className="text-xs text-muted">{quality.note}</p>
+              <p className="mt-1 text-[11px] text-muted">
+                Hover a column header for the metric definition. Faithfulness and hallucination are measured on factual claims only; hypotheses and tagged recommendations are scored separately.
+              </p>
             </div>
             <div className="text-xs text-muted">
               Faithfulness {pct(quality.totals.faithfulness)} · {quality.totals.unverified} unverified · {quality.totals.retries} reworks · {quality.totals.n} scored outputs
@@ -258,10 +308,10 @@ export default function AgentsPage() {
                   <tr>
                     <th className="pb-2 pr-3">Agent</th>
                     <th className="pb-2 pr-3 text-right">Outputs</th>
-                    <th className="pb-2 pr-3 text-right">Faithfulness</th>
-                    <th className="pb-2 pr-3 text-right">Hallucination</th>
-                    <th className="pb-2 pr-3 text-right">Reworks</th>
-                    <th className="pb-2 text-right">Unverified</th>
+                    <th className="pb-2 pr-3 text-right" title="Share of extracted numbers, IDs, dates and entities in the factual output that also appear in the SQL context. Hypotheses are scored separately and are not counted here.">Faithfulness</th>
+                    <th className="pb-2 pr-3 text-right" title="1 minus faithfulness on factual claims only. Recommended next steps and labelled hypotheses are not treated as hallucinations.">Hallucination</th>
+                    <th className="pb-2 pr-3 text-right" title="How many times the model was asked to rewrite after a grounding failure, before a deterministic replacement.">Reworks</th>
+                    <th className="pb-2 text-right" title="Outputs that could not be grounded in the SQL facts and were sent to the review queue. A timeout now still runs the deterministic grounding check rather than skipping it.">Unverified</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -289,6 +339,9 @@ export default function AgentsPage() {
         </p>
       )}
       {runId && <p className="text-[11px] text-muted">Run {runId}</p>}
+      {latest?.run && (
+        <p className="text-[11px] text-muted">Cached run status: {String(latest.run.status ?? "known")}</p>
+      )}
 
       <section>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">Roster</h2>
@@ -336,9 +389,6 @@ export default function AgentsPage() {
           <ActionQueue rows={actions} onDecide={decide} />
         </section>
       </div>
-      {latest?.run && (
-        <p className="text-[11px] text-muted">Cached run status: {String(latest.run.status ?? "known")}</p>
-      )}
     </div>
   );
 }
@@ -358,9 +408,9 @@ function AgentOutput({ output }: { output?: Record<string, unknown> }) {
         {chips.map((c) => (
           <SeverityBadge key={c} value={c} />
         ))}
-        {typeof output.confidence === "number" && (
+        {output.confidence != null && output.confidence !== "" && (
           <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-accent">
-            {(Number(output.confidence) * 100).toFixed(0)}% confidence
+            {formatConfidence(output.confidence)} confidence
           </span>
         )}
       </div>
@@ -434,6 +484,7 @@ function ActionList({ items }: { items: unknown }) {
 }
 
 function ActionQueue({ rows, onDecide }: { rows: ActionRow[]; onDecide: (id: string, status: "approved" | "rejected" | "done") => void }) {
+  const { canApprove } = useAuth();
   if (!rows.length) return <p className="text-sm text-muted">No queued actions yet. Run now to seed recommendations.</p>;
   return (
     <div className="max-h-96 overflow-auto">
@@ -443,7 +494,7 @@ function ActionQueue({ rows, onDecide }: { rows: ActionRow[]; onDecide: (id: str
             <th className="py-1">Action</th>
             <th className="py-1">Amount</th>
             <th className="py-1">Status</th>
-            <th className="py-1"></th>
+            <th className="py-1"><span className="sr-only">Decide</span></th>
           </tr>
         </thead>
         <tbody>
@@ -457,13 +508,13 @@ function ActionQueue({ rows, onDecide }: { rows: ActionRow[]; onDecide: (id: str
               <td className="py-1.5 tabular-nums text-danger">{inr(r.amount, true)}</td>
               <td className="py-1.5 capitalize">{r.status}</td>
               <td className="py-1.5 text-right">
-                {r.status === "proposed" && (
+                {r.status === "proposed" && canApprove({ action: r.action, exceptionId: r.exception_id, amount: r.amount }) && (
                   <div className="flex justify-end gap-1">
                     <Button size="sm" variant="success" onClick={() => onDecide(r.action_id, "approved")}>Approve</Button>
                     <Button size="sm" variant="danger" onClick={() => onDecide(r.action_id, "rejected")}>Reject</Button>
                   </div>
                 )}
-                {r.status === "approved" && (
+                {r.status === "approved" && canApprove({ action: r.action, exceptionId: r.exception_id, amount: r.amount }) && (
                   <Button size="sm" variant="outline" onClick={() => onDecide(r.action_id, "done")}>Mark done</Button>
                 )}
               </td>

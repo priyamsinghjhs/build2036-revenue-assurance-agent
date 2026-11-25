@@ -5,20 +5,17 @@ import { startRun, runAgentStep, completeRun } from "./agentRunner";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import { networkRisk } from "./network";
 import { compileExpectedFeeExpr, persistAndRunTests, loadRuleTests, validateFeeExpression } from "./sqlRule";
-
-const ASK_VIEWS = [
-  "v_ask_kpis",
-  "v_ask_areas",
-  "v_ask_exceptions",
-  "v_ask_controls",
-  "v_ask_anomalies",
-  "v_ask_contracts",
-  "v_ask_cases",
-  "v_ask_files",
-  "v_ask_routing",
-  "v_ask_risks",
-  "v_ask_clearing",
-];
+import { listSuggestionDecisions } from "./auditor";
+import { AppError } from "../shared/errors";
+import { isOutOfScopeQuestion, OUT_OF_SCOPE_MESSAGE } from "../shared/askScope";
+import {
+  ASK_SCHEMA_PROMPT,
+  ASK_VIEWS,
+  groundedAnswer,
+  matchAskTemplate,
+  normalizeQuestion,
+  type AskTemplateHit,
+} from "./askTemplates";
 
 export async function evalQuality(db: AppDb) {
   try {
@@ -102,7 +99,7 @@ export async function getDocument(db: AppDb, id: string) {
 export async function decideRule(db: AppDb, ruleId: string, status: "approved" | "rejected", who: string) {
   if (status === "approved") {
     const row = await db.prepare("SELECT tests_passed, sql_expression FROM ra_extracted_rules WHERE rule_id=?").bind(ruleId).first<{ tests_passed: number; sql_expression: string }>();
-    if (!row) throw new Error("Rule not found");
+    if (!row) throw new AppError("Rule not found", 404);
     if (!row.sql_expression) throw new Error("Rule has no validated sql_expression");
     if (!Number(row.tests_passed)) throw new Error("Rule must pass synthetic edge-case tests before activation");
   }
@@ -342,7 +339,7 @@ export async function listAnomalies(db: AppDb) {
     events: events ?? [],
     open_count,
     series: series ?? [],
-    note: "Featured events are the four injected seeds on the synthetic October book (UPI approval, ICICI settlement latency, Visa fee ratio, book-wide refund/CB). Refresh is idempotent by (metric, segment, day) and does not re-open investigated, resolved, or acknowledged events. A temporal autoencoder can be trained offline later and plugged in as an additional sensor. This page uses rolling z-score and EWMA bands computed in Postgres only.",
+    note: "Featured events combine the four injected z-score/EWMA seeds (UPI approval, ICICI settlement latency, Visa fee ratio, book-wide refund/CB) with isolation-forest flags on settlement fee ratios and FX markup (metric iforest_settlement / iforest_fx). Refresh is idempotent by (metric, segment, day) and does not re-open investigated, resolved, or acknowledged events. An sklearn MLP autoencoder is trained offline; reconstruction error is stored in Neon and is not scored in the Worker. Isolation-forest trees are also exported for single-row scoring in the Worker.",
   };
 }
 
@@ -367,12 +364,16 @@ export async function routingSummary(db: AppDb) {
   const { results: segments } = await db
     .prepare("SELECT * FROM ra_routing_sim_segments WHERE policy='thompson' ORDER BY segment_kind, fee_savings DESC")
     .all<Record<string, unknown>>();
+  const retry = await db.prepare("SELECT * FROM ra_retry_sim WHERE policy='thompson_retry'").first<Record<string, unknown>>();
+  const { results: arms } = await db.prepare("SELECT * FROM ra_retry_sim_arms WHERE policy='thompson_retry' ORDER BY arm").all<Record<string, unknown>>();
   return {
     synthetic: true,
     simulation: true,
     policies: policies ?? [],
     segments: segments ?? [],
-    note: "Simulation on the synthetic October 2026 book. Counterfactual approval rates use historical segment rates (model-based offline replay of epsilon-greedy and Thompson sampling), not live traffic. Negative fee savings mean the higher-approval route is slightly more expensive in acquirer bps.",
+    note: "Simulation on the synthetic October 2026 book. Counterfactual approval rates use historical segment rates (model-based offline replay of epsilon-greedy and Thompson sampling), not live traffic. Negative fee savings mean the higher-approval route is slightly more expensive in acquirer bps. The retry block is a separate fee-aware Thompson-style replay on soft declines (timing / alternate acquirer / network token); also not live traffic.",
+    retry: retry ?? null,
+    retry_arms: arms ?? [],
   };
 }
 
@@ -383,7 +384,11 @@ export async function runRoutingSim(db: AppDb) {
 
 export async function listCases(db: AppDb) {
   const { results } = await db
-    .prepare("SELECT * FROM ra_cases ORDER BY CASE status WHEN 'investigating' THEN 0 WHEN 'awaiting_approval' THEN 1 WHEN 'new' THEN 2 ELSE 3 END, leakage DESC")
+    .prepare(
+      `SELECT c.*, (SELECT e.exception_id FROM ra_case_exceptions e WHERE e.case_id=c.case_id LIMIT 1) AS exception_id
+       FROM ra_cases c
+       ORDER BY CASE c.status WHEN 'investigating' THEN 0 WHEN 'awaiting_approval' THEN 1 WHEN 'new' THEN 2 ELSE 3 END, c.leakage DESC`,
+    )
     .all<Record<string, unknown>>();
   return { cases: results ?? [] };
 }
@@ -461,7 +466,8 @@ export async function getReview(db: AppDb, id: string) {
     .prepare("SELECT c.* FROM ra_cases c JOIN ra_case_exceptions e ON e.case_id=c.case_id WHERE e.exception_id=? LIMIT 1")
     .bind(exId)
     .first<Record<string, unknown>>();
-  return { review: row, exception, case: linkedCase };
+  const suggestion_decisions = await listSuggestionDecisions(db, exId);
+  return { review: row, exception, case: linkedCase, suggestion_decisions };
 }
 
 export async function submitReview(
@@ -469,14 +475,15 @@ export async function submitReview(
   id: string,
   body: { decision: "approved" | "rejected" | "reinvestigate"; comment: string; amount_override?: number; reviewer?: string },
 ) {
-  if (!body.comment || !body.comment.trim()) throw new Error("A comment is required");
-  if (!["approved", "rejected", "reinvestigate"].includes(body.decision)) throw new Error("Invalid decision");
+  if (!body.comment || !body.comment.trim()) throw new AppError("A comment is required", 400);
+  if (!["approved", "rejected", "reinvestigate"].includes(body.decision)) throw new AppError("Invalid decision", 400);
   const db = getDb(env);
   const current = await getReview(db, id);
-  if (!current?.review) throw new Error("Review item not found");
+  if (!current?.review) throw new AppError("Review item not found", 404);
   const exceptionId = String(current.review.exception_id);
   const runId = String(current.review.run_id);
-  const reviewer = body.reviewer || "Priyam Singh";
+  const reviewer = body.reviewer;
+  if (!reviewer) throw new AppError("A signed-in reviewer is required", 401);
   const reviewId = crypto.randomUUID();
   const amount = body.amount_override != null ? normalizeAmount(body.amount_override) : normalizeAmount((current.exception as { leakage?: number } | null)?.leakage ?? 0);
   const actionStatus = body.decision === "approved" ? "approved" : body.decision === "rejected" ? "rejected" : "proposed";
@@ -746,15 +753,16 @@ export function validateAskSql(sql: string): string {
   if (!/^\s*(with|select)\b/i.test(trimmed)) throw new Error("Only SELECT or WITH … SELECT is allowed");
   if (FORBIDDEN.test(trimmed)) throw new Error("Statement uses a disallowed keyword");
   const lower = trimmed.toLowerCase();
-  const mentioned = ASK_VIEWS.filter((v) => lower.includes(v));
-  if (!mentioned.length) throw new Error(`Query must use an allow-listed view: ${ASK_VIEWS.join(", ")}`);
-  // crude table names: reject unidentified relations after from/join
-  const rels = [...lower.matchAll(/\b(?:from|join)\s+([a-z_][a-z0-9_.]*)/g)].map((m) => m[1]);
+  const allow = ASK_VIEWS as readonly string[];
+  const mentioned = allow.filter((v) => lower.includes(v));
+  if (!mentioned.length) throw new Error(`Query must use an allow-listed view: ${allow.join(", ")}`);
+  // Don't treat EXTRACT(... FROM ...), SUBSTRING(... FROM ...) as table references.
+  const stripped = lower.replace(/\b(?:extract|substring|substr|overlay|trim)\s*\([^)]*\)/g, " ");
+  const rels = [...stripped.matchAll(/\b(?:from|join)\s+([a-z_][a-z0-9_.]*)/g)].map((m) => m[1]);
   for (const rel of rels) {
     const base = rel.split(".").pop()!;
-    if (!ASK_VIEWS.includes(base) && !mentioned.includes(base)) {
-      throw new Error(`Relation ${rel} is not on the allow list`);
-    }
+    if ((ASK_VIEWS as readonly string[]).includes(base) || mentioned.includes(base)) continue;
+    throw new Error(`Relation ${rel} is not on the allow list`);
   }
   const limited = /\blimit\s+\d+\b/i.test(trimmed)
     ? trimmed.replace(/\blimit\s+(\d+)\b/i, (_, n) => `LIMIT ${Math.min(Number(n), 200)}`)
@@ -762,41 +770,146 @@ export function validateAskSql(sql: string): string {
   return limited;
 }
 
+const ASK_WRITE = /^\s*(insert|update|delete|drop|alter|create|grant|revoke|truncate|copy|vacuum)\b/i;
+
+type AskCacheEntry = {
+  at: number;
+  payload: Record<string, unknown>;
+};
+const ASK_CACHE = new Map<string, AskCacheEntry>();
+const ASK_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function cacheKey(question: string): string {
+  return normalizeQuestion(question);
+}
+
+async function logAsk(db: AppDb, question: string, sqlText: string, status: string, error?: string, rowCount?: number) {
+  try {
+    if (status === "ok") {
+      await db
+        .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, row_count) VALUES (?, now(), ?, ?, 'ok', ?)")
+        .bind(crypto.randomUUID(), question, sqlText, rowCount ?? 0)
+        .run();
+    } else {
+      await db
+        .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, error) VALUES (?, now(), ?, ?, ?, ?)")
+        .bind(crypto.randomUUID(), question, sqlText, status, error ?? "")
+        .run();
+    }
+  } catch {
+    /* log table may be absent on a stale schema */
+  }
+}
+
+async function llmSql(env: Env, question: string, repair?: { sql: string; error: string }): Promise<string> {
+  const prompt = repair
+    ? `The previous SQL failed. Write one corrected PostgreSQL SELECT. ${ASK_SCHEMA_PROMPT}\nQuestion: ${question}\nPrevious SQL:\n${repair.sql}\nError: ${repair.error}\nSQL:`
+    : `You write one PostgreSQL SELECT for a synthetic revenue-assurance book. ${ASK_SCHEMA_PROMPT}\nQuestion: ${question}\nSQL:`;
+  const raw = await complete(env.AI, prompt, { max_tokens: 256, timeout_ms: 12_000 });
+  return raw.trim().replace(/^```(?:sql)?\s*/i, "").replace(/\s*```$/, "");
+}
+
 export async function askData(env: Env, question: string) {
   const db = getDb(env);
-  const views = ASK_VIEWS.join(", ");
-  let generated = "";
-  const raw = await complete(
-    env.AI,
-    `You write one PostgreSQL SELECT for a synthetic revenue-assurance book. Use only these views: ${views}. Columns are self-explanatory (area, leakage, category, merchant_id, status, metric, day, value, policy, approval_uplift, fee_savings, case_id, risk_id). Reply with SQL only, no markdown. Limit 50 rows. Question: ${question}`,
-  );
-  generated = raw.trim().replace(/^```(?:sql)?\s*/i, "").replace(/\s*```$/, "");
-  let sqlText: string;
-  try {
-    sqlText = validateAskSql(generated);
-  } catch (e) {
-    const err = e instanceof Error ? e.message : String(e);
-    await db
-      .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, error) VALUES (?, now(), ?, ?, 'rejected', ?)")
-      .bind(crypto.randomUUID(), question, generated, err)
-      .run();
-    return { question, sql: generated, status: "rejected", error: err, rows: [] as Record<string, unknown>[] };
+  const started = Date.now();
+  const trimmedQ = question.trim();
+  if (isOutOfScopeQuestion(trimmedQ)) {
+    await logAsk(db, question, "", "refused", OUT_OF_SCOPE_MESSAGE);
+    return {
+      question,
+      sql: "",
+      status: "refused" as const,
+      error: OUT_OF_SCOPE_MESSAGE,
+      rows: [] as Record<string, unknown>[],
+      answer: OUT_OF_SCOPE_MESSAGE,
+      source: "scope",
+      cached: false,
+      timing_ms: Date.now() - started,
+    };
   }
-  try {
-    // Defence in depth: read-only transaction + role + timeout
+  const key = cacheKey(trimmedQ);
+  const hit = ASK_CACHE.get(key);
+  if (hit && Date.now() - hit.at < ASK_CACHE_TTL_MS) {
+    return { ...hit.payload, question, cached: true, timing_ms: Date.now() - started };
+  }
+
+  // Reject only questions that ARE write/stacked SQL — not English that happens to contain "drop" or "update".
+  if (ASK_WRITE.test(trimmedQ) || /;\s*\S/.test(trimmedQ)) {
+    const err = "Only a single allow-listed SELECT is permitted. Write and multi-statement questions are rejected without execution.";
+    await logAsk(db, question, "", "rejected", err);
+    return { question, sql: "", status: "rejected" as const, error: err, rows: [] as Record<string, unknown>[], answer: err, source: "rejected", cached: false, timing_ms: Date.now() - started };
+  }
+
+  const template: AskTemplateHit | null = /^\s*(with|select)\b/i.test(trimmedQ) ? null : matchAskTemplate(trimmedQ);
+  let generated = "";
+  let source: "template" | "llm" | "sql" = "llm";
+  if (/^\s*(with|select)\b/i.test(trimmedQ)) {
+    generated = trimmedQ;
+    source = "sql";
+  } else if (template) {
+    generated = template.sql;
+    source = "template";
+  } else {
+    try {
+      generated = await llmSql(env, trimmedQ);
+      source = "llm";
+    } catch (e) {
+      const err = e instanceof Error ? e.message : String(e);
+      await logAsk(db, question, "", "error", err);
+      return {
+        question, sql: "", status: "error" as const, error: "The model could not write SQL in time. Retry, or pick a suggested question.",
+        rows: [] as Record<string, unknown>[], answer: "", source: "llm", cached: false, timing_ms: Date.now() - started,
+      };
+    }
+  }
+
+  const tryRun = async (sqlCandidate: string) => {
+    const sqlText = validateAskSql(sqlCandidate);
     const rows = await runReadOnly(env, sqlText);
-    await db
-      .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, row_count) VALUES (?, now(), ?, ?, 'ok', ?)")
-      .bind(crypto.randomUUID(), question, sqlText, rows.length)
-      .run();
-    return { question, sql: sqlText, status: "ok", rows };
+    return { sqlText, rows };
+  };
+
+  let sqlText = generated;
+  try {
+    let ran: { sqlText: string; rows: Record<string, unknown>[] };
+    try {
+      ran = await tryRun(generated);
+    } catch (first) {
+      const firstErr = first instanceof Error ? first.message : String(first);
+      if (source === "llm") {
+        const repaired = await llmSql(env, trimmedQ, { sql: generated, error: firstErr });
+        ran = await tryRun(repaired);
+        generated = repaired;
+      } else {
+        throw first;
+      }
+    }
+    sqlText = ran.sqlText;
+    const answer = groundedAnswer(trimmedQ, ran.rows, template);
+    await logAsk(db, question, sqlText, "ok", undefined, ran.rows.length);
+    const payload = {
+      question,
+      sql: sqlText,
+      status: "ok" as const,
+      rows: ran.rows,
+      answer,
+      source,
+      template_id: template?.id ?? null,
+      cached: false,
+      timing_ms: Date.now() - started,
+    };
+    ASK_CACHE.set(key, { at: Date.now(), payload });
+    return payload;
   } catch (e) {
     const err = e instanceof Error ? e.message : String(e);
-    await db
-      .prepare("INSERT INTO ra_ask_log (log_id, ts, question, sql, status, error) VALUES (?, now(), ?, ?, 'error', ?)")
-      .bind(crypto.randomUUID(), question, sqlText, err.slice(0, 500))
-      .run();
-    return { question, sql: sqlText, status: "error", error: publicAskError(err), rows: [] as Record<string, unknown>[] };
+    const rejected = /allow-listed|not allowed|disallowed|single SELECT|Only SELECT/i.test(err);
+    const status = rejected ? "rejected" : "error";
+    const publicErr = rejected ? err : publicAskError(err);
+    await logAsk(db, question, sqlText || generated, status, err.slice(0, 500));
+    return {
+      question, sql: sqlText || generated, status, error: publicErr, rows: [] as Record<string, unknown>[],
+      answer: "", source, cached: false, timing_ms: Date.now() - started,
+    };
   }
 }
 
@@ -865,6 +978,6 @@ export async function graphTools(db: AppDb, opts: { merchant_id?: string; except
     path: paths ?? [],
     rings: rings ?? [],
     proximity,
-    note: "Graph tools run as deterministic SQL (recursive CTEs / entity edges) and are attached to the investigator; the model does not query the database itself.",
+    note: "Merchant-to-acquirer path, refund or chargeback rings, and closeness to known-bad entities. These links come from the ledger; they are not invented.",
   };
 }

@@ -23,13 +23,16 @@ import json
 import sys
 from pathlib import Path
 
-GOLDENS = Path(__file__).resolve().parent / "goldens"
+DEFAULT_GOLDENS = Path(__file__).resolve().parent / "goldens"
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("source", help="JSON file of rejected/unverified outputs")
+    p.add_argument("--output-dir", help="Directory to write goldens (default: evals/goldens)")
     args = p.parse_args(argv)
+    GOLDENS = Path(args.output_dir) if args.output_dir else DEFAULT_GOLDENS
+    GOLDENS.mkdir(parents=True, exist_ok=True)
     rows = json.loads(Path(args.source).read_text())
     if not isinstance(rows, list):
         print("Source must be a JSON array", file=sys.stderr)

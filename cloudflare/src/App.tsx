@@ -1,4 +1,4 @@
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import {
   Banknote,
   Bot,
@@ -32,8 +32,15 @@ import {
   Share2,
   BadgePercent,
   SlidersHorizontal,
+  BrainCircuit,
+  Database,
+  Settings,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { AuthProvider, useAuth } from "@/auth";
+import LoginPage from "@/pages/LoginPage";
+import UsersPage from "@/pages/UsersPage";
+import { Users } from "lucide-react";
 import ExecutivePage from "@/pages/ExecutivePage";
 import AreaPage from "@/pages/AreaPage";
 import AgentsPage from "@/pages/AgentsPage";
@@ -52,6 +59,10 @@ import FilesPage from "@/pages/FilesPage";
 import IngestionPage from "@/pages/IngestionPage";
 import ReviewQueuePage from "@/pages/ReviewQueuePage";
 import ReviewPage from "@/pages/ReviewPage";
+import ModelsPage from "@/pages/ModelsPage";
+import OpenDataPage from "@/pages/OpenDataPage";
+import SettingsPage from "@/pages/SettingsPage";
+import DataSourcesPage from "@/pages/DataSourcesPage";
 import { FilterProvider, useFilters } from "@/filters";
 import { Select } from "@/components/ui/select";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -82,6 +93,7 @@ const GROUPS = [
       { to: "/pricing", label: "Pricing", icon: Percent },
       { to: "/payouts", label: "Payouts", icon: Wallet },
       { to: "/chargebacks", label: "Chargebacks", icon: Store },
+      { to: "/false-declines", label: "False declines", icon: CreditCard },
       { to: "/hops", label: "Hops", icon: Waypoints },
       { to: "/interfaces", label: "Interface drops", icon: Radio },
       { to: "/success", label: "Success rate", icon: BadgePercent },
@@ -98,6 +110,8 @@ const GROUPS = [
   {
     label: "Intelligence",
     items: [
+      { to: "/models", label: "Model intelligence", icon: BrainCircuit },
+      { to: "/open-data", label: "Open data sources", icon: Database },
       { to: "/contracts", label: "Contracts & rules", icon: BookOpen },
       { to: "/anomalies", label: "Anomalies", icon: ShieldAlert },
       { to: "/routing", label: "Routing optimisation", icon: Waypoints },
@@ -135,9 +149,19 @@ const GROUPS = [
       { to: "/trace", label: "Transaction trace", icon: ScanSearch },
     ],
   },
+  {
+    label: "Settings",
+    items: [
+      { to: "/settings", label: "Settings", icon: Settings },
+      { to: "/settings/data-sources", label: "Data sources", icon: Database },
+      { to: "/settings/users", label: "Users", icon: Users },
+    ],
+  },
 ];
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+  const { navVisible, user } = useAuth();
+  const groups = GROUPS.map((g) => ({ ...g, items: g.items.filter((item) => navVisible(item.to)) })).filter((g) => g.items.length);
   return (
     <div className="flex h-full flex-col">
       <div className="px-5 py-5">
@@ -145,7 +169,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <div className="mt-1 text-sm font-semibold text-white">Revenue assurance</div>
       </div>
       <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 pb-6" aria-label="Primary">
-        {GROUPS.map((g) => (
+        {groups.map((g) => (
           <div key={g.label}>
             <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{g.label}</div>
             <div className="space-y-0.5">
@@ -170,6 +194,13 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           </div>
         ))}
       </nav>
+      {user ? (
+        <div className="border-t border-white/10 px-4 py-3 text-xs text-slate-300" data-testid="signed-in-user">
+          <div className="truncate font-medium text-white">{user.name}</div>
+          <div className="truncate font-mono text-[11px] text-slate-400">{user.id}</div>
+          <div className="uppercase tracking-wide text-slate-400">{user.role}</div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -216,6 +247,42 @@ function Breadcrumb() {
   );
 }
 
+const AREA_FILTER_SLUGS = new Set([
+  "authorization",
+  "scheme",
+  "bank",
+  "fees",
+  "terminals",
+  "apm",
+  "fx",
+  "pricing",
+  "payouts",
+  "chargebacks",
+  "billing",
+  "invoicing",
+  "cash",
+  "vendors",
+  "gl",
+  "hops",
+  "settlement",
+  "funding",
+  "acquirer",
+  "config",
+  "tax",
+  "kyc",
+  "interfaces",
+  "aml",
+  "success",
+  "false-declines",
+]);
+
+/** True only on Executive and Area pages, which honour merchant/scheme filters. */
+export function pathHonoursFilters(pathname: string): boolean {
+  if (pathname === "/") return true;
+  const slug = pathname.replace(/^\//, "").split("/")[0];
+  return AREA_FILTER_SLUGS.has(slug);
+}
+
 function FilterBar() {
   const { filters, setFilters, options } = useFilters();
   const merchants = [
@@ -227,7 +294,11 @@ function FilterBar() {
     ...(options?.schemes ?? []).map((s) => ({ value: s, label: s })),
   ];
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
+    <div className="space-y-2" data-testid="filter-bar">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted" data-testid="filter-applies-hint">
+        Filters apply to this page
+      </p>
+      <div className="grid gap-3 sm:grid-cols-3">
       <Select
         id="filter-period"
         label="Period"
@@ -249,12 +320,27 @@ function FilterBar() {
         onValueChange={(v) => setFilters({ scheme: v })}
         options={schemes}
       />
+      </div>
     </div>
   );
 }
 
+function RequireAuth({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth();
+  const { pathname, search } = useLocation();
+  if (loading) return <p className="p-8 text-sm text-muted">Checking session…</p>;
+  if (!user) {
+    const next = encodeURIComponent(pathname + search);
+    return <Navigate to={`/login?next=${next}`} replace />;
+  }
+  return <>{children}</>;
+}
+
 function Shell() {
   const [open, setOpen] = useState(false);
+  const { pathname } = useLocation();
+  const showFilters = pathHonoursFilters(pathname);
+  const { user, logout, can } = useAuth();
   return (
     <div className="flex min-h-screen">
       <aside className="hidden w-60 shrink-0 bg-navy-900 text-white md:block print:hidden">
@@ -283,10 +369,27 @@ function Shell() {
             <span className="hidden rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-warning sm:inline">
               Synthetic book
             </span>
+            {user ? (
+              <div className="flex items-center gap-2 print:hidden">
+                <span className="hidden max-w-[160px] truncate text-xs text-muted sm:inline" data-testid="header-user">
+                  {user.id}
+                </span>
+                <button
+                  type="button"
+                  className="rounded-md border border-line px-2 py-1 text-xs text-ink hover:bg-slate-50"
+                  onClick={() => void logout().then(() => { window.location.assign("/login"); })}
+                  data-testid="logout"
+                >
+                  Sign out
+                </button>
+              </div>
+            ) : null}
           </div>
-          <div className="mx-auto max-w-6xl border-t border-line px-4 py-3 md:px-8">
-            <FilterBar />
-          </div>
+          {showFilters ? (
+            <div className="mx-auto max-w-6xl border-t border-line px-4 py-3 md:px-8">
+              <FilterBar />
+            </div>
+          ) : null}
         </header>
         <main id="main" className="mx-auto max-w-6xl p-4 md:p-8">
           <Routes>
@@ -301,6 +404,17 @@ function Shell() {
             <Route path="/contracts" element={<ContractsPage />} />
             <Route path="/anomalies" element={<AnomaliesPage />} />
             <Route path="/routing" element={<RoutingPage />} />
+            <Route path="/models" element={<ModelsPage />} />
+            <Route path="/open-data" element={<OpenDataPage />} />
+            {can("settings") ? (
+              <>
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/settings/data-sources" element={<DataSourcesPage />} />
+                <Route path="/settings/data-sources/new/:connectorId" element={<DataSourcesPage />} />
+                <Route path="/settings/data-sources/c/:connectionId" element={<DataSourcesPage />} />
+              </>
+            ) : null}
+            {can("users") ? <Route path="/settings/users" element={<UsersPage />} /> : null}
             <Route path="/ask" element={<AskPage />} />
             <Route path="/cases" element={<CasesPage />} />
             <Route path="/risks" element={<RisksPage />} />
@@ -316,12 +430,24 @@ function Shell() {
   );
 }
 
+function AppRoutes() {
+  const { pathname } = useLocation();
+  if (pathname === "/login") return <LoginPage />;
+  return (
+    <RequireAuth>
+      <Shell />
+    </RequireAuth>
+  );
+}
+
 export default function App() {
   return (
     <TooltipProvider>
-      <FilterProvider>
-        <Shell />
-      </FilterProvider>
+      <AuthProvider>
+        <FilterProvider>
+          <AppRoutes />
+        </FilterProvider>
+      </AuthProvider>
     </TooltipProvider>
   );
 }

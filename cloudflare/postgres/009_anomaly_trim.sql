@@ -67,6 +67,7 @@ BEGIN
   UPDATE ra_anomaly_events e
      SET status = 'closed'
    WHERE e.status = 'open'
+     AND e.metric NOT LIKE 'iforest_%'
      AND (e.metric, e.segment, e.day) NOT IN (
        ('approval_rate','UPI', DATE '2026-10-18'),
        ('settlement_latency','ACQ-ICICI', DATE '2026-10-22'),
@@ -74,7 +75,7 @@ BEGIN
        ('refund_cb_ratio','ALL', DATE '2026-10-27')
      );
 END;
-$sync$;;
+$sync$;
 
 CREATE OR REPLACE FUNCTION public.refresh_ra_v7()
 RETURNS void
@@ -172,13 +173,14 @@ BEGIN
   WHERE s.gross > 0
   GROUP BY 2,3
   UNION ALL
-  -- settlement latency (days) by acquirer
+  -- settlement latency (days) by acquirer — one aggregated row per acquirer and day
   SELECT 'settlement_latency', acq.acquirer_id, COALESCE(acq.received_date, acq.expected_date)::date,
-         EXTRACT(EPOCH FROM (COALESCE(acq.received_date, acq.expected_date)::timestamp
-           - acq.expected_date::timestamp))/86400.0,
-         acq.received_amount
+         AVG(EXTRACT(EPOCH FROM (COALESCE(acq.received_date, acq.expected_date)::timestamp
+           - acq.expected_date::timestamp))/86400.0),
+         SUM(acq.received_amount)
   FROM ra_acquirer_settlements acq
   WHERE acq.expected_date IS NOT NULL
+  GROUP BY 2, 3
   UNION ALL
   -- refund / chargeback ratio vs captured volume by day
   SELECT 'refund_cb_ratio', 'ALL', d.day,

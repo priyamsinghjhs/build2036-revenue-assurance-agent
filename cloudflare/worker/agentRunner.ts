@@ -1,4 +1,5 @@
-import { complete } from "./llm";
+import { complete, classifyAIError, DEFAULT_AI_TIMEOUT_MS } from "./llm";
+import { compactContext, NARRATIVE_MAX_TOKENS } from "./compact";
 import {
   AGENT_ROSTER,
   type AgentId,
@@ -15,7 +16,9 @@ import {
 import type { Env } from "./types";
 import { getDb, type AppDb } from "./pg";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
+import { inrExact } from "../shared/money";
 import { checkGrounding, retryPrompt } from "./grounding";
+import { AUDITOR_SCHEMA, alignCfoToVerdict, finalizeAuditorOutput } from "./auditor";
 
 const JSON_HINT = "Reply with compact JSON only. No markdown fences, no prose outside JSON.";
 
@@ -61,6 +64,32 @@ function safeParse(s: string): unknown {
   }
 }
 
+const EVIDENCE_TTL_MS = 60_000;
+const evidenceCache = new Map<string, { at: number; payload: Record<string, unknown> }>();
+
+export async function getCachedExceptionInput(env: Env, exceptionId: string): Promise<{ input: Record<string, unknown>; cache_hit: boolean; neon_ms: number }> {
+  const hit = evidenceCache.get(exceptionId);
+  if (hit && Date.now() - hit.at < EVIDENCE_TTL_MS) {
+    return { input: hit.payload, cache_hit: true, neon_ms: 0 };
+  }
+  const db = getDb(env);
+  const t0 = Date.now();
+  const ex = await getException(db, exceptionId);
+  const { graphTools } = await import("./intel");
+  const [graph, policy] = await Promise.all([
+    graphTools(db, { merchant_id: ex?.merchant_id ?? undefined, exception_id: exceptionId }).catch(() => null),
+    policyText(db, ex?.area ?? "synthetic"),
+  ]);
+  const payload = {
+    task: "Investigate this single exception. Use the attached merchant-to-acquirer path, refund or chargeback rings, and closeness to known-bad entities as evidence. Do not invent links. Write for a human reviewer: no internal tool names or snake_case field names. If a cause is not proven by the facts, label it a hypothesis.",
+    exception: ex,
+    network_links: graph,
+    policy,
+  };
+  evidenceCache.set(exceptionId, { at: Date.now(), payload });
+  return { input: payload, cache_hit: false, neon_ms: Date.now() - t0 };
+}
+
 export async function buildInput(env: Env, agentId: AgentId, scope: string, domain?: string, exceptionId?: string) {
   const db = getDb(env);
   if (agentId === "orchestrator") {
@@ -104,13 +133,16 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
       recon_network: ["network_risk"],
       recon_success: ["success"],
       recon_files: ["files"],
+      recon_false_declines: ["false_declines"],
       contract_extract: ["contracts"],
     };
     const areas = map[agentId] ?? (domain ? [domain as AreaId] : []);
-    const summaries = [];
-    for (const a of areas) summaries.push(await domainSummaryForAgent(db, a));
     const topic = areas[0] === "bank_trs" ? "bank_trs" : areas[0] === "gateway" || areas[0] === "network" ? "fees" : areas[0] ?? "synthetic";
-    return { task: "Interpret these SQL reconciliation summaries. Do not recompute totals.", summaries, policy: await policyText(db, topic) };
+    const [summaries, policy] = await Promise.all([
+      Promise.all(areas.map((a) => domainSummaryForAgent(db, a))),
+      policyText(db, topic),
+    ]);
+    return { task: "Interpret these SQL reconciliation summaries. Do not recompute totals.", summaries, policy };
   }
   if (agentId === "gap_detection") {
     const areas = await summarizeAll(db);
@@ -122,10 +154,8 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
     };
   }
   if (exceptionId) {
-    const ex = await getException(db, exceptionId);
-    const { graphTools } = await import("./intel");
-    const graph = await graphTools(db, { merchant_id: ex?.merchant_id ?? undefined, exception_id: exceptionId }).catch(() => null);
-    return { task: "Investigate this single exception. Use the attached graph_tools results (paths, refund/chargeback rings, proximity) as evidence; do not invent graph edges.", exception: ex, graph_tools: graph, policy: await policyText(db, ex?.area ?? "synthetic") };
+    const cached = await getCachedExceptionInput(env, exceptionId);
+    return cached.input;
   }
   const top = await listExceptions(db, domain, 8);
   return {
@@ -163,12 +193,21 @@ export function systemPrompt(agentId: AgentId): string {
     recon_network: reconSchema("network_risk"),
     recon_success: reconSchema("success"),
     recon_files: reconSchema("files"),
+    recon_false_declines: reconSchema("false_declines"),
     contract_extract: reconSchema("contracts"),
     gap_detection: `{"severity":"critical|high|medium|low","themes":["short theme"],"priority_gaps":[{"exception_id":"","issue":"","amount":0,"priority":"high|medium|low"}],"narrative":"one sentence"}`,
     investigator: `{"root_cause":"short","evidence":["chip"],"affected":"who/what","confidence":80}` /* confidence is an integer 0-100 */,
     action: `{"actions":[{"type":"dispute|recover|rebill|escalate|adjust|mark_known","target":"ref or merchant","amount":0,"currency":"INR","confidence":80,"rationale":"short"}]}`,
-    auditor: `{"signoff":"ready|needs_review","compliance_notes":"short","audit_points":["point"],"cfo_one_liner":"one sentence"}`,
+    auditor: AUDITOR_SCHEMA,
   };
+  const extra = agentId === "auditor" ? [
+    "You must audit and suggest, not only sign off.",
+    "Include all six checks (amount_reconciliation, evidence_completeness, policy_compliance, duplicate_prior_case, segregation_of_duties, grounding).",
+    "Suggestions are in-app proposals only: they may map to the Action Queue, an in-app dispute/data-request draft, or a case. Never send email or call an external API.",
+    "verdict is approved, needs_review, or rejected. Every number and ID must appear in INPUT.",
+    "Every sentence in checks.evidence, findings, rationale, cfo_one_liner and suggestion rationale must cite a figure or ID from the INPUT evidence pack, or start with Hypothesis: or Recommendation: (those tags are not scored as facts).",
+    "Advice lines must name the evidence-pack figure they rely on (leakage, expected, actual, or exception id).",
+  ] : [];
   return [
     `You are the ${meta?.name} agent for a payment-acquiring revenue assurance platform.`,
     meta?.role ?? "",
@@ -178,6 +217,7 @@ export function systemPrompt(agentId: AgentId): string {
     "confidence is an integer 0-100, not a 0-1 fraction. amounts are plain numbers (no currency symbols or words).",
     JSON_HINT,
     `Schema: ${schemas[agentId]}`,
+    ...extra,
   ].join("\n");
 }
 
@@ -185,45 +225,195 @@ function reconSchema(domain: string) {
   return `{"domain":"${domain}","assessment":"one sentence","match_quality":"good|watch|poor","top_gaps":[{"ref":"","issue":"","amount":0,"priority":"high|medium|low"}],"recommended_focus":"short"}`;
 }
 
+const STEP_BUDGET_MS = 22_000;
+
+function factBag(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== "object") return {};
+  const rec = input as Record<string, unknown>;
+  const ex = rec.exception && typeof rec.exception === "object" ? rec.exception as Record<string, unknown> : rec;
+  return { ...rec, ...ex };
+}
+
+function deterministicStepOutput(
+  agentId: AgentId,
+  input: unknown,
+  priors: { agent: string; output: unknown }[],
+  reason: string,
+): Record<string, unknown> {
+  const facts = factBag(input);
+  const leakage = facts.leakage ?? facts.amount ?? facts.expected_amount;
+  const ref = String(facts.recon_ref ?? facts.ref_id ?? facts.exception_id ?? "this exception");
+  const area = String(facts.area ?? facts.domain ?? "revenue assurance");
+  if (agentId === "auditor") {
+    const out = finalizeAuditorOutput({ parse_error: true, source: "deterministic" }, input, priors);
+    out.source = "deterministic";
+    out.verdict = "needs_review";
+    out.signoff = "needs_review";
+    alignCfoToVerdict(out);
+    const note = `Deterministic auditor fallback (${reason}). The LLM step did not complete or was unavailable. Routed to human review.`;
+    out.compliance_notes = `${note} ${String(out.compliance_notes ?? "")}`.trim();
+    out.rationale = String(out.rationale ?? note);
+    return out as unknown as Record<string, unknown>;
+  }
+  if (agentId === "action") {
+    const amt = leakage == null || leakage === "" ? null : Number(leakage);
+    return {
+      actions: [
+        {
+          type: "escalate",
+          action: "escalate",
+          amount: amt,
+          currency: String(facts.currency ?? "INR"),
+          confidence: 40,
+          rationale: `Deterministic proposal for ${ref}: the action agent could not finish (${reason}). Escalate for human review${amt != null && Number.isFinite(amt) ? " of " + inrExact(amt) : ""}.`,
+        },
+      ],
+      source: "deterministic",
+    };
+  }
+  const expected = facts.expected_amount != null ? Number(facts.expected_amount) : null;
+  const actual = facts.actual_amount != null ? Number(facts.actual_amount) : null;
+  const leakN = leakage == null || leakage === "" ? null : Number(leakage);
+  const category = String(facts.category ?? "").replace(/_/g, " ");
+  const parts: string[] = [];
+  if (expected != null && Number.isFinite(expected) && actual != null && Number.isFinite(actual)) {
+    parts.push(`Expected ${inrExact(expected)} versus actual ${inrExact(actual)}${leakN != null && Number.isFinite(leakN) ? `, difference ${inrExact(leakN)}` : ""}.`);
+  } else if (leakN != null && Number.isFinite(leakN)) {
+    parts.push(`Booked difference ${inrExact(leakN)}.`);
+  }
+  const root = parts.length
+    ? `${category || "Exception"} on ${ref}${facts.merchant_id ? " at " + facts.merchant_id : ""} in ${String(area).replace(/_/g, " ")}. ${parts.join(" ")}`
+    : `Deterministic summary for ${ref} in ${String(area).replace(/_/g, " ")}: review the ledger facts before acting.`;
+  const hypothesis = /under.?payout|reserve/i.test(String(facts.category ?? "") + String(area))
+    ? "Hypothesis: the shortfall may come from an incorrect reserves calculation. That cause is not confirmed in the exception facts."
+    : undefined;
+  return {
+    root_cause: root,
+    hypothesis,
+    evidence: [ref, facts.merchant_id, expected != null ? `expected ${inrExact(expected)}` : "", actual != null ? `actual ${inrExact(actual)}` : "", leakN != null && Number.isFinite(leakN) ? `difference ${inrExact(leakN)}` : ""].filter(Boolean),
+    affected: [ref, facts.merchant_id].filter(Boolean),
+    confidence: parts.length ? 80 : 40,
+    source: "deterministic",
+    note: reason && reason !== "requested" ? `Fallback used because ${reason}.` : undefined,
+  };
+}
+
 export async function runAgentStep(
   env: Env,
-  opts: { runId: string; agentId: AgentId; scope: string; domain?: string; exceptionId?: string },
+  opts: { runId: string; agentId: AgentId; scope: string; domain?: string; exceptionId?: string; mode?: "llm" | "deterministic" },
 ) {
+  const neonStarted = Date.now();
   const input = await buildInput(env, opts.agentId, opts.scope, opts.domain, opts.exceptionId);
   const priors = await priorOutputs(getDb(env), opts.runId);
+  const neon_ms = Date.now() - neonStarted;
   const briefPriors = priors.slice(-4).map((p) => ({ agent: p.agent_id, output: p.output }));
-  const user = JSON.stringify({ input, prior_agents: briefPriors }).slice(0, 6000);
+  const user = compactContext({ input, prior_agents: briefPriors }, 4000, "INPUT");
   const basePrompt = `${systemPrompt(opts.agentId)}\n\nINPUT:\n${user}`;
   let output: Record<string, unknown> = {};
   let grounding = checkGrounding({}, user);
   let retries = 0;
-  const maxRetries = 2;
   let prompt = basePrompt;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const raw = await complete(env.AI, prompt);
-    try {
-      output = parseJson(raw);
-    } catch {
-      output = { raw, parse_error: true };
-    }
-    output = sanitizeAgentOutput(output);
-    grounding = checkGrounding(output, user);
-    if (grounding.passed) break;
-    if (attempt === maxRetries) break;
-    retries += 1;
-    prompt = `${basePrompt}\n\n${retryPrompt(grounding.unsupported)}\n\nPREVIOUS_OUTPUT:\n${JSON.stringify(output).slice(0, 2000)}`;
-  }
-  const passed = grounding.passed;
-  output.verification = passed ? "grounded" : "unverified";
-  output.faithfulness = Math.round(grounding.faithfulness * 1000) / 1000;
-  if (!passed) {
-    output.unsupported_claims = grounding.unsupported.map((c) => `${c.kind}:${c.value}`);
+  const started = neonStarted;
+  const deadline = started + STEP_BUDGET_MS;
+  let ai_ms = 0;
+  if (opts.mode === "deterministic") {
+    output = sanitizeAgentOutput(deterministicStepOutput(opts.agentId, input, briefPriors, "requested"));
     if (opts.agentId === "auditor") {
+      output = finalizeAuditorOutput(output, input, briefPriors, checkGrounding(output, user));
+      output.source = "deterministic";
+      output.verdict = "needs_review";
       output.signoff = "needs_review";
-      const reason = `Grounding check failed after ${retries} rework(s): ${(output.unsupported_claims as string[]).join(", ")}. Treat as unverified, not as fact.`;
-      output.compliance_notes = `${String(output.compliance_notes ?? "")} ${reason}`.trim();
+      output = alignCfoToVerdict(output as import("./auditor").AuditorOutput) as Record<string, unknown>;
+    }
+    grounding = checkGrounding(output, user);
+  } else {
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining < 2000) {
+        output = sanitizeAgentOutput(deterministicStepOutput(opts.agentId, input, briefPriors, "step budget exhausted"));
+        if (opts.agentId === "auditor") {
+          output = finalizeAuditorOutput(output, input, briefPriors, checkGrounding(output, user));
+          output.source = "deterministic";
+          output.verdict = "needs_review";
+          output.signoff = "needs_review";
+          output = alignCfoToVerdict(output as import("./auditor").AuditorOutput) as Record<string, unknown>;
+        }
+        break;
+      }
+      const timeoutMs = Math.min(DEFAULT_AI_TIMEOUT_MS, Math.max(2000, remaining - 500));
+      try {
+        const aiStarted = Date.now();
+        const raw = await complete(env.AI, prompt, {
+          json: opts.agentId === "auditor",
+          timeout_ms: timeoutMs,
+          max_tokens: NARRATIVE_MAX_TOKENS,
+        });
+        ai_ms += Date.now() - aiStarted;
+        try {
+          output = parseJson(raw);
+        } catch {
+          output = { raw, parse_error: true };
+        }
+        output = sanitizeAgentOutput(output);
+        if (opts.agentId === "auditor") {
+          output = finalizeAuditorOutput(output, input, briefPriors, checkGrounding(output, user));
+        }
+        grounding = checkGrounding(output, user);
+        if (grounding.passed) break;
+        if (attempt === 1 || deadline - Date.now() < 4000) break;
+        retries += 1;
+        prompt = `${basePrompt}\n\n${retryPrompt(grounding.unsupported)}\n\nPREVIOUS_OUTPUT:\n${JSON.stringify(output).slice(0, 2000)}`;
+      } catch (err) {
+        const classified = classifyAIError(err);
+        const reason = classified.kind === "cap"
+          ? "Workers AI quota or neuron cap"
+          : classified.kind === "timeout"
+            ? "Workers AI timeout"
+            : classified.message;
+        output = sanitizeAgentOutput(deterministicStepOutput(opts.agentId, input, briefPriors, reason));
+        if (opts.agentId === "auditor") {
+          output = finalizeAuditorOutput(output, input, briefPriors, checkGrounding(output, user));
+          output.source = "deterministic";
+          output.verdict = "needs_review";
+          output.signoff = "needs_review";
+          output = alignCfoToVerdict(output as import("./auditor").AuditorOutput) as Record<string, unknown>;
+        }
+        break;
+      }
     }
   }
+  grounding = checkGrounding(output, user);
+  if (output && typeof output === "object" && grounding.hypothesis) {
+    output.hypothesis_faithfulness = Math.round(grounding.hypothesis.faithfulness * 1000) / 1000;
+    output.hypothesis_claims = grounding.hypothesis.claims;
+  }
+  let passed = grounding.passed;
+  if (!passed) {
+    const unsupported = grounding.unsupported.map((c) => `${c.kind}:${c.value}`);
+    output = sanitizeAgentOutput(deterministicStepOutput(opts.agentId, input, briefPriors, "GroundedNumbers below 1.0"));
+    if (opts.agentId === "auditor") {
+      output = finalizeAuditorOutput(output, input, briefPriors, grounding);
+      output.source = "deterministic";
+      output.verdict = "needs_review";
+      output.signoff = "needs_review";
+      output = alignCfoToVerdict(output as import("./auditor").AuditorOutput) as Record<string, unknown>;
+    }
+    grounding = checkGrounding(output, user);
+    passed = grounding.passed;
+    output.verification = "deterministic_replacement";
+    output.replaced = true;
+    output.unsupported_claims = unsupported;
+    const reason = `Model narrative was replaced with the deterministic template because GroundedNumbers was below 1.0 after ${retries} rework(s): ${unsupported.join(", ") || "unsupported claims"}.`;
+    if (opts.agentId === "auditor") {
+      output.compliance_notes = `${String(output.compliance_notes ?? "")} ${reason}`.trim();
+    } else if (!output.note) {
+      output.note = reason;
+    }
+  } else {
+    output.verification = "grounded";
+  }
+  output.faithfulness = Math.round(grounding.faithfulness * 1000) / 1000;
+  output.timing = { total_ms: Date.now() - started, neon_ms, ai_ms, retries };
   const outputId = crypto.randomUUID();
   const created = new Date().toISOString();
   const db = getDb(env);
@@ -247,7 +437,7 @@ export async function runAgentStep(
         grounding.claims,
         grounding.supported,
         retries,
-        passed ? "grounded" : "unverified",
+        String(output.verification ?? (passed ? (String(output.source || "") === "deterministic" ? "deterministic_replacement" : "grounded") : "grounding_failed")),
         JSON.stringify(grounding.unsupported),
         created,
       )
@@ -268,14 +458,14 @@ export async function runAgentStep(
             opts.runId,
             "auditor",
             opts.domain ?? null,
-            JSON.stringify({
+            JSON.stringify(finalizeAuditorOutput({
+              verdict: "needs_review",
               signoff: "needs_review",
-              compliance_notes: `Upstream ${opts.agentId} output marked unverified after grounding rework. Unsupported: ${(output.unsupported_claims as string[]).join(", ")}. Do not treat as fact.`,
-              audit_points: ["Grounding / faithfulness check failed"],
+              compliance_notes: `Upstream ${opts.agentId} output failed the deterministic grounding check. Unsupported: ${(output.unsupported_claims as string[]).join(", ")}. Do not treat as fact.`,
               cfo_one_liner: "An agent output could not be grounded in the SQL facts and needs human review.",
-              verification: "unverified",
+              verification: "grounding_failed",
               faithfulness: output.faithfulness,
-            }),
+            }, input, briefPriors)),
             created,
           )
           .run();
@@ -356,20 +546,77 @@ export async function latestRun(db: AppDb, scope?: string) {
 export async function listActions(db: AppDb, limit = 50) {
   const { results } = await db
     .prepare("SELECT * FROM ra_action_queue ORDER BY created_at DESC LIMIT ?")
-    .bind(limit)
-    .all();
-  return results ?? [];
+    .bind(Math.max(limit, 80))
+    .all<Record<string, unknown>>();
+  const rows = results ?? [];
+  const refs = [...new Set(rows.map((r) => {
+    const id = String(r.exception_id ?? "");
+    const parts = id.split(":");
+    return parts.length >= 3 ? parts.slice(2).join(":") : id;
+  }).filter(Boolean))];
+  const scores = new Map<string, { chargeback_score: number; dispute_win_score: number }>();
+  if (refs.length) {
+    const ph = refs.map(() => "?").join(",");
+    const { results: sc } = await db
+      .prepare(
+        `SELECT subject_id, model_id, score FROM ra_model_scores
+         WHERE model_id IN ('chargeback','dispute_win') AND subject_id IN (${ph})`,
+      )
+      .bind(...refs)
+      .all<{ subject_id: string; model_id: string; score: number }>();
+    for (const s of sc ?? []) {
+      const cur = scores.get(s.subject_id) ?? { chargeback_score: 0, dispute_win_score: 0 };
+      if (s.model_id === "chargeback") cur.chargeback_score = Number(s.score);
+      if (s.model_id === "dispute_win") cur.dispute_win_score = Number(s.score);
+      scores.set(s.subject_id, cur);
+    }
+  }
+  const enriched = rows.map((r) => {
+    const id = String(r.exception_id ?? "");
+    const parts = id.split(":");
+    const ref = parts.length >= 3 ? parts.slice(2).join(":") : id;
+    const sc = scores.get(ref);
+    return {
+      ...r,
+      amount: r.amount,
+      chargeback_score: sc?.chargeback_score ?? null,
+      dispute_win_score: sc?.dispute_win_score ?? null,
+    };
+  });
+  enriched.sort((a, b) => {
+    const cb = Number(b.chargeback_score ?? 0) - Number(a.chargeback_score ?? 0);
+    if (cb) return cb;
+    return Number(b.amount ?? 0) - Number(a.amount ?? 0);
+  });
+  return enriched.slice(0, limit);
+}
+
+function plainUserText(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  let s = value
+    .replace(/graph_tools[^.,;]*/gi, "the merchant-to-acquirer path and related risk links")
+    .replace(/\b(paths, rings, proximity)\b/gi, "related risk links")
+    .replace(/\bra_[a-z0-9_]+\b/gi, "the ledger")
+    .replace(/\bv_ask_[a-z0-9_]+\b/gi, "the summary view");
+  const rootLike = /incorrect reserves calculation/i.test(s) && !/hypothesis/i.test(s);
+  if (rootLike) s = `Hypothesis: ${s.trim()}`;
+  return s;
 }
 
 function sanitizeAgentOutput(output: Record<string, unknown>): Record<string, unknown> {
   const next = { ...output };
   if (next.confidence !== undefined) next.confidence = normalizeConfidence(next.confidence);
+  for (const key of ["root_cause", "summary", "rationale", "hypothesis", "cfo_one_liner", "note"]) {
+    if (typeof next[key] === "string") next[key] = plainUserText(next[key]);
+  }
+  if (Array.isArray(next.evidence)) next.evidence = (next.evidence as unknown[]).map((e) => plainUserText(e));
   const actionRows = Array.isArray(next.actions) ? (next.actions as Record<string, unknown>[]) : null;
   if (actionRows) {
     next.actions = actionRows.map((act) => ({
       ...act,
       amount: act.amount !== undefined ? normalizeAmount(act.amount) : act.amount,
       confidence: act.confidence !== undefined ? normalizeConfidence(act.confidence) : act.confidence,
+      rationale: plainUserText(act.rationale),
     }));
   }
   for (const key of ["top_gaps", "priority_gaps"] as const) {

@@ -10,7 +10,7 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": true
   },
   "ai": {
     "binding": "AI"
@@ -20,4 +20,10 @@
   },
   // Runtime database is Neon Postgres via secret DATABASE_URL
   // (npx wrangler secret put DATABASE_URL). Do not add a D1 binding.
+  // Credential envelope: npx wrangler secret put DATA_SOURCES_KEK (32-byte key, base64). Never commit it.
+  // Optional Hyperdrive (Postgres/MySQL) on the Workers free plan. Do not invent an id here.
+  // After you create a config (dashboard or `wrangler hyperdrive create`), add e.g.
+  // "hyperdrive": [{ "binding": "HYPERDRIVE_MYSQL", "id": "<id>" }] and redeploy.
+  // This repo does not create Hyperdrive configs or Cloudflare Tunnels automatically.
 }
+

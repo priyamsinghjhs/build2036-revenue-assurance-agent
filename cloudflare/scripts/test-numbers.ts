@@ -1,4 +1,4 @@
-import { normalizeAmount, normalizeConfidence, parseLooseNumber } from "../shared/numbers";
+import { formatConfidence, normalizeAmount, normalizeConfidence, parseLooseNumber } from "../shared/numbers";
 import { publicErrorMessage } from "../shared/errors";
 
 function assert(cond: unknown, msg: string) {
@@ -37,6 +37,16 @@ assert(parseLooseNumber("abc") == null, "loose garbage");
 const sql = publicErrorMessage(new Error('invalid input syntax for type integer: "0.9"'));
 assert(!sql.includes("0.9"), "must not leak postgres detail");
 assert(/unexpected format/i.test(sql), `friendly sql: ${sql}`);
-assert(publicErrorMessage(new Error("Unknown agent_id")).includes("Unknown agent_id"), "keep short app errors");
+assert(!publicErrorMessage(new Error("Unknown agent_id")).includes("Unknown agent_id"), "unclassified short errors stay generic");
+assert(!publicErrorMessage(new Error("numeric field overflow")).includes("numeric field overflow"), "no raw overflow");
+
+
+eq(formatConfidence(70), "70%", "already-percent integer is not scaled");
+eq(formatConfidence(0.7), "70%", "fraction becomes 70% not 7000%");
+eq(formatConfidence("70%"), "70%", "percent string");
+eq(formatConfidence(7000), "100%", "absurd value is clamped, not shown as 7000%");
+eq(formatConfidence(-3), "0%", "clamp low display");
+eq(formatConfidence(1), "100%", "1 is 100%");
+assert(!formatConfidence(70).includes("7000"), "must never render 7000%");
 
 console.log("test-numbers ok");

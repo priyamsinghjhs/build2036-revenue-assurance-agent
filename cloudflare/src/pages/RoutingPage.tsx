@@ -59,6 +59,46 @@ export default function RoutingPage() {
           ))}
         </CardContent>
       </Card>
+      {data.retry && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Dynamic retry (fee-aware Thompson replay)</CardTitle>
+            <CardDescription>{data.retry.note || "Deterministic replay on soft declines. Not live traffic."}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard label="Candidates" value={String(data.retry.n_candidates)} hint="Soft declines only" />
+              <KpiCard label="Simulated approval" value={pct(Number(data.retry.approval_sim))} tone="ok" />
+              <KpiCard label="Recovered" value={inr(Number(data.retry.recovered), true)} hint={`Net ${inr(Number(data.retry.net_reward), true)} after fees`} tone="ok" />
+              <KpiCard label="Approval uplift" value={pct(Number(data.retry.approval_uplift))} tone="ok" />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[480px] text-left text-sm">
+                <thead className="text-[11px] uppercase tracking-wide text-muted">
+                  <tr>
+                    <th className="pb-2 pr-3">Arm</th>
+                    <th className="pb-2 pr-3 text-right">N</th>
+                    <th className="pb-2 pr-3 text-right">Share of recovered</th>
+                    <th className="pb-2 pr-3 text-right">Recovered</th>
+                    <th className="pb-2 text-right">Fee cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.retry_arms ?? []).map((a) => (
+                    <tr key={a.arm} className="border-t border-line">
+                      <td className="py-2 pr-3">{a.arm.replace(/_/g, " ")}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{a.n}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{pct(Number(a.p_approve))}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{inr(Number(a.recovered), true)}</td>
+                      <td className="py-2 text-right tabular-nums">{inr(Number(a.fee_cost), true)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

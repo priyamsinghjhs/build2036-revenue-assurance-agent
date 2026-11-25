@@ -11,6 +11,11 @@ export type Env = {
   AI: AiBinding;
   DATABASE_URL: string;
   ASSETS: Fetcher;
+  DATA_SOURCES_KEK?: string;
+  /** PBKDF2-SHA256 hash+salt of the shared app password. Never the password itself. */
+  APP_PASSWORD_HASH: string;
+  /** HMAC key for signed session cookies. */
+  SESSION_SECRET: string;
 };
 
 export type SettlementListRow = {

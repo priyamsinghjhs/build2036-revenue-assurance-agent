@@ -1,14 +1,84 @@
 import { MAX_TOKENS, MODEL, TEMPERATURE, type AiBinding } from "./types";
 
-export async function complete(ai: AiBinding, prompt: string): Promise<string> {
-  const result = await ai.run(MODEL, {
+export type CompleteOpts = { json?: boolean; max_tokens?: number; timeout_ms?: number };
+
+export const DEFAULT_AI_TIMEOUT_MS = 12_000;
+
+export class WorkersAIError extends Error {
+  readonly kind: "timeout" | "empty" | "cap" | "failed";
+  constructor(message: string, kind: "timeout" | "empty" | "cap" | "failed" = "failed") {
+    super(message);
+    this.name = "WorkersAIError";
+    this.kind = kind;
+  }
+}
+
+export function isWorkersAIError(err: unknown): err is WorkersAIError {
+  return err instanceof WorkersAIError;
+}
+
+export function classifyAIError(err: unknown): WorkersAIError {
+  if (err instanceof WorkersAIError) return err;
+  const raw = err instanceof Error ? err.message : String(err ?? "Workers AI failed");
+  if (/timed out|timeout|aborted/i.test(raw)) return new WorkersAIError(raw, "timeout");
+  if (/neuron|quota|rate limit|capacity|exceeded|throttl/i.test(raw)) return new WorkersAIError(raw, "cap");
+  return new WorkersAIError(raw, "failed");
+}
+
+type TimerFn = {
+  setTimeout: (cb: () => void, ms: number) => unknown;
+  clearTimeout: (id: unknown) => void;
+};
+
+export function withTimeout<T>(promise: Promise<T>, ms: number, label = "Workers AI"): Promise<T> {
+  const timers = globalThis as unknown as TimerFn;
+  return new Promise((resolve, reject) => {
+    const timer = timers.setTimeout(() => {
+      reject(new WorkersAIError(`${label} timed out after ${ms}ms`, "timeout"));
+    }, ms);
+    promise.then(
+      (value) => {
+        timers.clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        timers.clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+export async function complete(ai: AiBinding, prompt: string, opts: CompleteOpts = {}): Promise<string> {
+  const inputs: Record<string, unknown> = {
     messages: [{ role: "user", content: prompt }],
     temperature: TEMPERATURE,
-    max_tokens: MAX_TOKENS,
-  });
+    max_tokens: opts.max_tokens ?? MAX_TOKENS,
+  };
+  if (opts.json) {
+    inputs.response_format = { type: "json_object" };
+  }
+  const timeoutMs = opts.timeout_ms ?? DEFAULT_AI_TIMEOUT_MS;
+  let result: unknown;
+  try {
+    result = await withTimeout(Promise.resolve(ai.run(MODEL, inputs)), timeoutMs, "Workers AI");
+  } catch (err) {
+    const classified = classifyAIError(err);
+    if (opts.json && classified.kind !== "timeout" && classified.kind !== "cap") {
+      // Some Workers AI accounts/models reject response_format; retry without it.
+      delete inputs.response_format;
+      try {
+        result = await withTimeout(Promise.resolve(ai.run(MODEL, inputs)), timeoutMs, "Workers AI");
+      } catch (retryErr) {
+        throw classifyAIError(retryErr);
+      }
+    } else {
+      throw classified;
+    }
+  }
   const text = extractText(result);
   if (!text) {
-    throw new Error(describeEmpty(result));
+    throw new WorkersAIError(describeEmpty(result), "empty");
   }
   return text;
 }

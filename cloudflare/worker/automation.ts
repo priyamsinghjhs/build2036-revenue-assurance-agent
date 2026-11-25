@@ -1,45 +1,13 @@
-import { completeRun, runAgentStep, startRun } from "./agentRunner";
+import { completeRun, startRun } from "./agentRunner";
 import { executiveSummary, type ExecPayload } from "./executive";
+import { deterministicBullets } from "./brief";
 import { complete } from "./llm";
 import { getDb, type AppDb } from "./pg";
 import type { Env } from "./types";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import { investigateAnomaly } from "./intel";
-
-function inr(n: number): string {
-  const abs = Math.abs(n);
-  const sign = n < 0 ? "−" : "";
-  if (abs >= 10_000_000) return `${sign}₹${(abs / 10_000_000).toFixed(2)} Cr`;
-  if (abs >= 100_000) return `${sign}₹${(abs / 100_000).toFixed(2)} L`;
-  return `${sign}₹${Math.round(abs).toLocaleString("en-IN")}`;
-}
-
-function pct(n: number): string {
-  return `${(n * 100).toFixed(1)}%`;
-}
-
-export function deterministicBullets(exec: ExecPayload): string[] {
-  const k = exec.kpis;
-  const top = exec.top_drivers[0];
-  const worst = [...exec.heatmap].sort((a, b) => a.match_rate - b.match_rate)[0];
-  const ageing = exec.ageing.find((a) => a.bucket === "61+ days") ?? exec.ageing[exec.ageing.length - 1];
-  const bullets = [
-    `Gross acquiring volume of ${inr(k.revenue)} in ${exec.period.label} carried ${inr(k.leakage)} of leakage (${pct(k.leakage_pct)} of revenue) across ${k.exception_count} open exceptions.`,
-    top
-      ? `The largest driver is ${top.category.replace(/_/g, " ")} in ${top.area} (${inr(top.leakage)}, ${top.n} cases).`
-      : `Overall match rate is ${pct(k.match_rate)}.`,
-    worst
-      ? `${worst.label} is the weakest domain at ${pct(worst.match_rate)} match and ${inr(worst.leakage)} leakage.`
-      : `Recoverable leakage stands at ${inr(k.recoverable)}.`,
-    `Recovery position: ${inr(k.recovered)} recovered, ${inr(k.recoverable)} still recoverable, ${inr(k.written_off)} written off.`,
-  ];
-  if (ageing && ageing.n > 0) {
-    bullets.push(`${ageing.n} exceptions in the ${ageing.bucket} SLA bucket represent ${inr(ageing.leakage)} at risk of ageing out.`);
-  } else {
-    bullets.push(`Book-level match rate is ${pct(k.match_rate)} on ${k.auth_count.toLocaleString("en-IN")} authorizations.`);
-  }
-  return bullets.slice(0, 5);
-}
+import { runInvestigation } from "./investigateFlow";
+import { syncDue } from "./dataSources/store";
 
 const ACTION_FOR: Record<string, string> = {
   billed_not_invoiced: "raise_invoice",
@@ -102,14 +70,19 @@ export async function seedProposedActions(db: AppDb, runId: string, limit = 8) {
     )
     .bind(limit)
     .all<{ area: string; category: string; ref_id: string; leakage: number; currency: string }>();
+  const ids = (results ?? []).map((row) => `${row.area}:${row.category}:${row.ref_id}`);
+  const existing = new Set<string>();
+  if (ids.length) {
+    const { results: have } = await db
+      .prepare(`SELECT exception_id FROM ra_action_queue WHERE exception_id IN (${ids.map(() => "?").join(",")})`)
+      .bind(...ids)
+      .all<{ exception_id: string }>();
+    for (const r of have ?? []) existing.add(String(r.exception_id));
+  }
   let created = 0;
   for (const row of results ?? []) {
     const exceptionId = `${row.area}:${row.category}:${row.ref_id}`;
-    const existing = await db
-      .prepare("SELECT action_id FROM ra_action_queue WHERE exception_id = ? LIMIT 1")
-      .bind(exceptionId)
-      .first();
-    if (existing) continue;
+    if (existing.has(exceptionId)) continue;
     const action = ACTION_FOR[row.category] ?? "escalate";
     await db
       .prepare(
@@ -142,6 +115,17 @@ export async function upsertNarrative(env: Env, exec: ExecPayload, force: boolea
   }
   let bullets = deterministicBullets(exec);
   let source: "llm" | "deterministic" = "deterministic";
+  if (!force) {
+    await db
+      .prepare(
+        `INSERT INTO ra_exec_brief (id, as_of, bullets, source, generated_at)
+         VALUES (1, ?, ?::jsonb, ?, now())
+         ON CONFLICT (id) DO UPDATE SET as_of = EXCLUDED.as_of, bullets = EXCLUDED.bullets, source = EXCLUDED.source, generated_at = now()`,
+      )
+      .bind(today, JSON.stringify(bullets), source)
+      .run();
+    return { skipped: false, source };
+  }
   try {
     const raw = await complete(
       env.AI,
@@ -176,32 +160,42 @@ export async function upsertNarrative(env: Env, exec: ExecPayload, force: boolea
   return { skipped: false, source };
 }
 
-export async function investigateTop(env: Env, runId: string) {
-  const db = getDb(env);
-  const top = await db
-    .prepare("SELECT area, category, ref_id, leakage FROM ra_exception_rows ORDER BY leakage DESC LIMIT 1")
-    .first<{ area: string; category: string; ref_id: string; leakage: number }>();
-  if (!top) return { skipped: true };
-  const exceptionId = `${top.area}:${top.category}:${top.ref_id}`;
-  const steps = ["investigator", "action", "auditor"] as const;
-  const outputs: string[] = [];
-  for (const agentId of steps) {
-    await runAgentStep(env, {
-      runId,
-      agentId,
-      scope: `exception:${exceptionId}`,
-      domain: top.area,
-      exceptionId,
-    });
-    outputs.push(agentId);
-  }
-  return { skipped: false, exception_id: exceptionId, leakage: top.leakage, steps: outputs };
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  let i = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), Math.max(items.length, 1)) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      out[idx] = await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
-export async function runDailyAutomation(env: Env, opts: { force?: boolean } = {}) {
+export async function investigateTop(env: Env, runId: string, opts: { limit?: number; concurrency?: number } = {}) {
+  const db = getDb(env);
+  const cap = Math.max(1, opts.limit ?? 1);
+  const { results } = await db
+    .prepare("SELECT area, category, ref_id, leakage FROM ra_exception_rows ORDER BY leakage DESC LIMIT ?")
+    .bind(cap)
+    .all<{ area: string; category: string; ref_id: string; leakage: number }>();
+  if (!results?.length) return { skipped: true };
+  const concurrency = Math.min(opts.concurrency ?? 2, 3);
+  const cases = await mapLimit(results, concurrency, async (top) => {
+    const exceptionId = `${top.area}:${top.category}:${top.ref_id}`;
+    const inv = await runInvestigation(env, { exceptionId, domain: top.area, runId });
+    return { exception_id: exceptionId, leakage: top.leakage, timing_ms: inv.timing_ms, steps: ["investigator", "action", "auditor"] };
+  });
+  return { skipped: false, cases, concurrency };
+}
+
+export async function runDailyAutomation(env: Env, opts: { force?: boolean; skipLlm?: boolean } = {}) {
   const db = getDb(env);
   const logId = crypto.randomUUID();
   const started = new Date().toISOString();
+  const detail: Record<string, unknown> = {};
+  const skipLlm = opts.skipLlm === true || opts.force !== true;
   try {
     await db
       .prepare("INSERT INTO ra_automation_log (log_id, started_at, status, detail) VALUES (?, ?, 'running', '{}'::jsonb)")
@@ -210,46 +204,69 @@ export async function runDailyAutomation(env: Env, opts: { force?: boolean } = {
   } catch {
     // table might not exist yet on a stale deploy; continue
   }
-  const detail: Record<string, unknown> = {};
+  const finish = async (status: "completed" | "failed", extra: Record<string, unknown> = {}) => {
+    const payload = { ...detail, ...extra };
+    await db
+      .prepare("UPDATE ra_automation_log SET finished_at = ?, status = ?, detail = ?::jsonb WHERE log_id = ?")
+      .bind(new Date().toISOString(), status, JSON.stringify(payload), logId)
+      .run()
+      .catch(() => undefined);
+  };
   try {
     const run = await startRun(db, opts.force ? "automation:manual" : "automation:daily");
+    try {
+      await db.prepare("SELECT refresh_ra_summaries()").first();
+      detail.summaries_refreshed = true;
+    } catch (err) {
+      detail.summaries_refresh_error = err instanceof Error ? err.message : String(err);
+    }
     const exec = await executiveSummary(db);
-    detail.narrative = await upsertNarrative(env, exec, Boolean(opts.force));
+    detail.executive_leakage = exec.kpis.leakage;
+    detail.executive_exceptions = exec.kpis.exception_count;
+    // Daily cron uses the deterministic brief so a Workers AI timeout cannot leave the job 'running'.
+    // A manual run (force) may still call the model, and falls back to deterministic bullets on error.
+    detail.narrative = await upsertNarrative(env, exec, Boolean(opts.force) && !skipLlm);
     detail.actions_seeded = await seedProposedActions(db, run.run_id);
     try {
-      const ev = await db
-        .prepare("SELECT event_id FROM ra_anomaly_events WHERE status='open' AND investigated_run IS NULL ORDER BY ABS(COALESCE(zscore,0)) DESC LIMIT 1")
-        .first<{ event_id: string }>();
-      if (ev) detail.investigation = await investigateAnomaly(env, ev.event_id);
-      else detail.investigation = await investigateTop(env, run.run_id);
+      const ds = await syncDue(db, env, 3);
+      detail.data_sources_synced = ds.length;
     } catch (err) {
-      detail.investigation_error = err instanceof Error ? err.message : String(err);
+      detail.data_sources_error = err instanceof Error ? err.message : String(err);
+    }
+    if (skipLlm) {
+      detail.investigation = { skipped: true, reason: "deterministic_cron", note: "Action proposals are seeded; investigator/auditor run when a human starts an investigation or a forced automation run." };
+    } else {
+      try {
+        const ev = await db
+          .prepare("SELECT event_id FROM ra_anomaly_events WHERE status='open' AND investigated_run IS NULL ORDER BY ABS(COALESCE(zscore,0)) DESC LIMIT 1")
+          .first<{ event_id: string }>();
+        const work = ev ? investigateAnomaly(env, ev.event_id) : investigateTop(env, run.run_id, { limit: 3, concurrency: 2 });
+        const timeout = new Promise((_, reject) => {
+          (globalThis as unknown as { setTimeout: (cb: () => void, ms: number) => void })
+            .setTimeout(() => reject(new Error("investigation_timeout")), 45_000);
+        });
+        detail.investigation = await Promise.race([work, timeout]);
+      } catch (err) {
+        detail.investigation_error = err instanceof Error ? err.message : String(err);
+      }
     }
     await completeRun(db, run.run_id);
     detail.run_id = run.run_id;
-    await db
-      .prepare("UPDATE ra_automation_log SET finished_at = ?, status = 'completed', detail = ?::jsonb WHERE log_id = ?")
-      .bind(new Date().toISOString(), JSON.stringify(detail), logId)
-      .run()
-      .catch(() => undefined);
+    await finish("completed");
     return { ok: true, log_id: logId, ...detail };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await db
-      .prepare("UPDATE ra_automation_log SET finished_at = ?, status = 'failed', detail = ?::jsonb WHERE log_id = ?")
-      .bind(new Date().toISOString(), JSON.stringify({ ...detail, error: message }), logId)
-      .run()
-      .catch(() => undefined);
+    await finish("failed", { error: message });
     return { ok: false, log_id: logId, error: message, ...detail };
   }
 }
 
-export async function setActionStatus(db: AppDb, actionId: string, status: "approved" | "rejected" | "done", note?: string) {
+export async function setActionStatus(db: AppDb, actionId: string, status: "approved" | "rejected" | "done", note?: string, decidedBy?: string) {
   const row = await db.prepare("SELECT action_id FROM ra_action_queue WHERE action_id = ?").bind(actionId).first();
   if (!row) return false;
   await db
-    .prepare("UPDATE ra_action_queue SET status = ?, decided_at = ?, decision_note = ? WHERE action_id = ?")
-    .bind(status, new Date().toISOString(), note ?? null, actionId)
+    .prepare("UPDATE ra_action_queue SET status = ?, decided_at = ?, decision_note = ?, decided_by = COALESCE(?, decided_by) WHERE action_id = ?")
+    .bind(status, new Date().toISOString(), note ?? null, decidedBy ?? null, actionId)
     .run();
   return true;
 }
