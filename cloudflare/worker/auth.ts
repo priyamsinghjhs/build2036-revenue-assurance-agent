@@ -136,7 +136,6 @@ async function revokeSessions(env: Env, userId: string): Promise<void> {
   }
 }
 
-
 async function peekJson(c: AuthCtx): Promise<Record<string, unknown>> {
   try {
     const clone = c.req.raw.clone();
@@ -183,7 +182,6 @@ export async function authMiddleware(c: AuthCtx, next: Next): Promise<Response |
   if (perm === "deny") throw new HTTPException(403, { message: "You do not have permission for this action." });
 
   if (perm === "approve_action") {
-    // Fine-grained check happens in the route after the action is loaded.
     if (
       !hasPermission(user.role, "approve_any") &&
       !hasPermission(user.role, "approve_treasury") &&
@@ -225,6 +223,20 @@ export async function handleLogin(c: AuthCtx): Promise<Response> {
   }
 }
 
+async function getUserPasswordHash(db: AppDb, userId: string): Promise<string | null> {
+  try {
+    const row = await db
+      .prepare("SELECT password_hash FROM ra_user_passwords WHERE user_id = ?")
+      .bind(userId)
+      .first<{ password_hash: string }>();
+    const h = row?.password_hash?.trim();
+    if (h && h !== "SEED_FROM_ENV") return h;
+  } catch {
+    /* table may not exist yet */
+  }
+  return null;
+}
+
 async function handleLoginInner(c: AuthCtx): Promise<Response> {
   const ip = clientIp(c.req);
   const burst = await hitRateLimit(`login:ip:${ip}`, 30, LOGIN_WINDOW_SEC);
@@ -242,9 +254,9 @@ async function handleLoginInner(c: AuthCtx): Promise<Response> {
     throw new HTTPException(400, { message: "username and password are required" });
   }
 
-  const hash = c.env.APP_PASSWORD_HASH || "";
+  const sharedHash = c.env.APP_PASSWORD_HASH || "";
   const secret = c.env.SESSION_SECRET || "";
-  if (!hash || !secret) {
+  if (!sharedHash || !secret) {
     throw new HTTPException(503, { message: "Sign-in is not configured on this Worker." });
   }
   const db = getDb(c.env);
@@ -253,8 +265,10 @@ async function handleLoginInner(c: AuthCtx): Promise<Response> {
   }
 
   const user = findUser(username);
-  const ok = await verifyPassword(password, hash);
-  // Always hash even if the user is unknown, then reject uniformly.
+  const perUserHash = user ? await getUserPasswordHash(db, user.id) : null;
+  const hashToCheck = perUserHash || sharedHash;
+  const ok = await verifyPassword(password, hashToCheck);
+  // Always verify even if the user is unknown, then reject uniformly.
   if (!user || !ok) {
     await recordAttempt(db, username || "unknown", ip, false);
     throw new HTTPException(401, { message: "Invalid username or password." });
