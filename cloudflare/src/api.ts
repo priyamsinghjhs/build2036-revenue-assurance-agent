@@ -115,7 +115,11 @@ export type RecoveryTotals = {
   n?: number; tracked?: number; closed?: number; overdue?: number;
   potential: number; recovered: number; written_off: number; open: number; recovery_rate: number;
   by_state: Record<string, { n: number; expected: number; recovered: number }>;
-  check?: { book_leakage: number; potential_equals_book_leakage: boolean };
+  check?: {
+    book_leakage: number;
+    potential_equals_book_leakage: boolean;
+    summary_only_areas?: { area: string; n: number; leakage: number }[];
+  };
   scoped?: boolean;
 };
 export type RecoveryHistoryRow = { id: number; from_state: string; to_state: string; amount_delta: number; recovered_total: number; owner: string | null; due_date: string | null; actor: string; role: string; note: string | null; at: string };

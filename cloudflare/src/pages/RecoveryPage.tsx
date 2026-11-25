@@ -38,8 +38,17 @@ export default function RecoveryPage() {
         <h1 className="text-2xl font-semibold tracking-tight text-ink">Recovery tracker</h1>
         <p className="text-sm text-muted">
           Every book exception from identified to closed. Potential equals book leakage; all figures are SQL sums over{" "}
-          <code>v_ra_recovery_tracker</code>{totals.scoped ? " (filtered to your role's scope)" : ""}.
+          <code>v_ra_recovery_tracker</code>{totals.scoped ? " (filtered to your role's scope)" : ""}. Book exceptions are
+          every reconciliation area (incl. network-fee variances) except exposure areas (AML, KYC, network risk, success,
+          interfaces, anomalies, file checks) — the same set as the Executive “Open exceptions” count.
         </p>
+        {(totals.check?.summary_only_areas?.length ?? 0) > 0 && (
+          <p className="mt-1 text-xs text-warning" data-testid="recovery-summary-only">
+            Not yet itemised:{" "}
+            {totals.check!.summary_only_areas!.map((a) => `${a.area} (${a.n})`).join(", ")} — counted in the area
+            summary but without row-level exceptions, so they are not in this tracker.
+          </p>
+        )}
       </header>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <KpiCard label="Potential" value={inrExact(totals.potential)} hint={`${totals.n ?? total} book exceptions`} />

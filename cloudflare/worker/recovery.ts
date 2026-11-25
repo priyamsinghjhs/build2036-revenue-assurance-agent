@@ -60,7 +60,7 @@ function mapRow(r: ViewRow) {
 
 /** Book-level totals straight from SQL. potential equals the executive book leakage. */
 export async function recoverySqlTotals(db: AppDb) {
-  const [tot, states, book] = await Promise.all([
+  const [tot, states, book, summaryOnly] = await Promise.all([
     db
       .prepare(
         `SELECT COUNT(*)::int AS n,
@@ -84,6 +84,17 @@ export async function recoverySqlTotals(db: AppDb) {
     db
       .prepare(`SELECT COALESCE(ROUND(SUM(leakage)::numeric, 2), 0)::float AS leakage FROM ra_exception_rows WHERE ${BOOK_LEAKAGE_SQL}`)
       .first<{ leakage: number }>(),
+    // Areas whose summary row counts exceptions that have no materialised rows: the executive
+    // overlay would count them but the tracker cannot. Should be empty; surfaced so a gap is explained.
+    db
+      .prepare(
+        `SELECT s.area, s.exception_count::int AS n, ROUND(s.leakage::numeric, 2)::float AS leakage
+         FROM ra_area_summary s
+         WHERE s.exception_count > 0 AND s.${BOOK_LEAKAGE_SQL}
+           AND NOT EXISTS (SELECT 1 FROM ra_exception_rows e WHERE e.area = s.area)`,
+      )
+      .all<{ area: string; n: number; leakage: number }>()
+      .catch(() => ({ results: [] as { area: string; n: number; leakage: number }[] })),
   ]);
   const potential = normalizeAmount(tot?.potential);
   const recovered = normalizeAmount(tot?.recovered);
@@ -107,6 +118,7 @@ export async function recoverySqlTotals(db: AppDb) {
     check: {
       book_leakage: normalizeAmount(book?.leakage),
       potential_equals_book_leakage: Math.abs(normalizeAmount(book?.leakage) - potential) <= 0.009,
+      summary_only_areas: (summaryOnly.results ?? []).map((r) => ({ area: r.area, n: Number(r.n), leakage: normalizeAmount(r.leakage) })),
     },
     source: "sql:v_ra_recovery_tracker",
   };

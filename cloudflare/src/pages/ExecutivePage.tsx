@@ -132,7 +132,7 @@ export default function ExecutivePage() {
         <ExecHeroTile
           label="Open exceptions"
           value={k.exception_count.toLocaleString("en-IN")}
-          hint="Book count — exposure areas excluded"
+          hint="Book exceptions, same set as Recovery (excl. AML, KYC, network-risk, anomaly, file & interface exposure)"
           tone="warn"
           spark={exceptionTrend}
           testId="exec-exception-count"
@@ -157,7 +157,7 @@ export default function ExecutivePage() {
           </CardHeader>
           <CardContent>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <KpiCard label="Potential" value={inr(recovery.potential, true)} hint={`${recovery.n ?? 0} book exceptions`} />
+              <KpiCard label="Potential" value={inr(recovery.potential, true)} hint={`${recovery.n ?? 0} book exceptions · same set as Open exceptions`} />
               <KpiCard label="Recovered (tracked)" value={inr(recovery.recovered, true)} hint={`${recovery.closed ?? 0} closed`} tone="ok" />
               <KpiCard label="Recovery rate" value={pct(recovery.recovery_rate, 2)} hint="recovered ÷ potential" />
               <KpiCard label="Open" value={inr(recovery.open, true)} hint={`written off ${inr(recovery.written_off, true)} · ${recovery.overdue ?? 0} overdue`} tone="warn" />
