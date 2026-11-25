@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { inrExact } from "../../shared/money";
 import { AuditPanel } from "@/components/AuditPanel";
 import { useAuth } from "@/auth";
+import { RecoveryPanel } from "@/components/RecoveryPanel";
 
 function asObj(v: unknown): Record<string, unknown> {
   if (!v) return {};
@@ -77,6 +78,7 @@ export default function ReviewPage() {
           <p>Investigate: <Link className="text-accent hover:underline" to={`/investigate/${encodeURIComponent(decoded)}`}>Open investigation</Link></p>
         </CardContent>
       </Card>
+      <RecoveryPanel exceptionId={String(data.item.exception_id ?? decoded)} />
       <Card>
         <CardHeader>
           <CardTitle>Auditor review</CardTitle>
