@@ -14,7 +14,8 @@
     "test:review-amount": "npx tsx scripts/test-review-amount.ts",
     "test:figures": "npx tsx scripts/test-figure-consistency.ts",
     "test:recon": "npx tsx scripts/test-recon-template.ts && npx tsx scripts/test-grounding.ts && npx tsx scripts/test-ask-templates.ts",
-    "test": "npm run test:format && npm run test:numbers && npm run test:review-amount && npm run test:figures && npm run test:recon"
+    "test": "npm run test:format && npm run test:numbers && npm run test:review-amount && npm run test:figures && npm run test:recon && npm run test:rules",
+    "test:rules": "npx tsx scripts/test-recon-config.ts && npx tsx scripts/test-recovery.ts && npx tsx scripts/test-recon-jobs.ts"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

@@ -1,6 +1,7 @@
 import type { AppDb } from "./pg";
 import { enrichExceptions } from "./ml/registry";
 import { normalizeAmount } from "../shared/numbers";
+import { hasActiveTolerance, withinTolerance, type AreaRuleConfig } from "../shared/reconConfig";
 import { BOOK_LEAKAGE_SQL, bookTotalsFromAreas, overlayLiveSummary, type LiveAreaLeakage } from "../shared/bookLeakage";
 
 export async function liveLeakageByArea(db: AppDb): Promise<Map<string, LiveAreaLeakage>> {
@@ -454,7 +455,7 @@ export async function systemMap(db: AppDb): Promise<{ nodes: MapNode[]; edges: M
   };
 }
 const AGENT_SUMMARY_TTL_MS = 60_000;
-const agentSummaryCache = new Map<string, { at: number; value: Awaited<ReturnType<typeof loadDomainSummaryForAgent>> }>();
+const agentSummaryCache = new Map<string, { at: number; value: AgentDomainSummary }>();
 
 /**
  * SQL evidence pack for one recon agent. The three reads run in parallel and the
@@ -463,11 +464,81 @@ const agentSummaryCache = new Map<string, { at: number; value: Awaited<ReturnTyp
  * exception-row totals, so the narrative can cross-check them against the summary.
  */
 export async function domainSummaryForAgent(db: AppDb, area: AreaId) {
-  const hit = agentSummaryCache.get(area);
+  // Rules are read at run time; the cache key carries the rule version so an approved change applies at once.
+  const { activeReconConfig } = await import("./reconConfig");
+  const rules = await activeReconConfig(db);
+  const key = `${area}:v${rules.version}`;
+  const hit = agentSummaryCache.get(key);
   if (hit && Date.now() - hit.at < AGENT_SUMMARY_TTL_MS) return hit.value;
-  const value = await loadDomainSummaryForAgent(db, area);
-  agentSummaryCache.set(area, { at: Date.now(), value });
+  const areaCfg = (rules.config.areas as Record<string, AreaRuleConfig>)[area];
+  const base = await loadDomainSummaryForAgent(db, area);
+  let value: AgentDomainSummary = { ...base, rule_version: rules.version, match_thresholds: rules.config.global };
+  if (areaCfg) value.matching_keys = areaCfg.matching_keys;
+  if (hasActiveTolerance(areaCfg)) {
+    const { results } = await db
+      .prepare("SELECT * FROM ra_exception_rows WHERE area = ? ORDER BY leakage DESC")
+      .bind(area)
+      .all<Record<string, unknown>>();
+    value = applyRuleTolerances(value, (results ?? []).map(mapException), areaCfg);
+  }
+  agentSummaryCache.set(key, { at: Date.now(), value });
   return value;
+}
+
+type PackTop = Awaited<ReturnType<typeof loadDomainSummaryForAgent>>["top_exceptions"][number];
+
+/**
+ * Apply configured tolerances to a recon pack. Rows within tolerance move from
+ * leakage/exceptions to matched and are reported separately. Pure, so the
+ * tests can prove the all-zero defaults leave every figure unchanged.
+ */
+export function applyRuleTolerances(pack: AgentDomainSummary, rows: ExceptionRow[], cfg: AreaRuleConfig): AgentDomainSummary {
+  const latest = rows.reduce<string | null>((m, r) => (r.ts && (!m || r.ts > m) ? r.ts : m), null);
+  const tolerated: { row: ExceptionRow; rule: string }[] = [];
+  const kept: ExceptionRow[] = [];
+  for (const r of rows) {
+    const rule = withinTolerance(r, cfg, latest);
+    if (rule) tolerated.push({ row: r, rule });
+    else kept.push(r);
+  }
+  if (!tolerated.length) return pack;
+  const tolLeak = normalizeAmount(tolerated.reduce((s, t) => s + Number(t.row.leakage || 0), 0));
+  const tolVar = tolerated.filter((t) => t.row.status === "variance").length;
+  const tolUnm = tolerated.length - tolVar;
+  const variance = Math.max(0, pack.variance - tolVar);
+  const unmatched = Math.max(0, pack.unmatched - tolUnm);
+  const matched = pack.matched + (pack.variance - variance) + (pack.unmatched - unmatched);
+  const total = matched + unmatched + variance;
+  const by_rule: Record<string, number> = {};
+  for (const t of tolerated) by_rule[t.rule] = (by_rule[t.rule] ?? 0) + 1;
+  const top: PackTop[] = kept
+    .slice()
+    .sort((a, b) => Number(b.leakage) - Number(a.leakage))
+    .slice(0, 8)
+    .map((e) => ({
+      exception_id: e.exception_id,
+      category: e.category,
+      status: e.status,
+      leakage: e.leakage,
+      severity: e.severity,
+      merchant_id: e.merchant_id,
+      ref: e.recon_ref || e.ref_id,
+    }));
+  return {
+    ...pack,
+    matched,
+    unmatched,
+    variance,
+    total_items: total,
+    match_rate: total ? Number((matched / total).toFixed(4)) : pack.match_rate,
+    leakage: normalizeAmount(pack.leakage - tolLeak),
+    exception_count: Math.max(0, pack.exception_count - tolerated.length),
+    rows_count: Math.max(0, pack.rows_count - tolerated.length),
+    rows_leakage: normalizeAmount(pack.rows_leakage - tolLeak),
+    top_exceptions: top,
+    top_leakage_sum: normalizeAmount(top.reduce((s, e) => s + Number(e.leakage || 0), 0)),
+    within_tolerance: { n: tolerated.length, leakage: tolLeak, by_rule },
+  };
 }
 
 export function clearAgentSummaryCache() {
@@ -515,7 +586,12 @@ async function loadDomainSummaryForAgent(db: AppDb, area: AreaId) {
   };
 }
 
-export type AgentDomainSummary = Awaited<ReturnType<typeof loadDomainSummaryForAgent>>;
+export type AgentDomainSummary = Awaited<ReturnType<typeof loadDomainSummaryForAgent>> & {
+  rule_version?: number;
+  match_thresholds?: { match_good: number; match_watch: number };
+  matching_keys?: string[];
+  within_tolerance?: { n: number; leakage: number; by_rule: Record<string, number> };
+};
 
 export async function policyText(db: AppDb, topic: string): Promise<string> {
   const { results } = await db
