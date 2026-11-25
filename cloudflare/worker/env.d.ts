@@ -78,6 +78,7 @@ declare class Request {
   text(): Promise<string>;
   json(): Promise<unknown>;
   arrayBuffer(): Promise<ArrayBuffer>;
+  clone(): Request;
 }
 
 declare class Headers {

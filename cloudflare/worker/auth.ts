@@ -24,6 +24,8 @@ import {
   SESSION_COOKIE,
 } from "./session";
 import { clientIp, hitRateLimit } from "./rateLimit";
+import { isOutOfScopeQuestion } from "../shared/askScope";
+import { matchAskTemplate } from "./askTemplates";
 
 type Bindings = Env;
 type Variables = { user?: AppUser; authChecked?: boolean };
@@ -134,6 +136,31 @@ async function revokeSessions(env: Env, userId: string): Promise<void> {
   }
 }
 
+
+async function peekJson(c: AuthCtx): Promise<Record<string, unknown>> {
+  try {
+    const clone = c.req.raw.clone();
+    const body = await clone.json();
+    if (body && typeof body === "object" && !Array.isArray(body)) return body as Record<string, unknown>;
+  } catch {
+    /* no body */
+  }
+  return {};
+}
+
+/** Only meter calls that will actually invoke Workers AI (protect the free neuron budget). */
+async function requestUsesWorkersAi(c: AuthCtx, path: string): Promise<boolean> {
+  const body = await peekJson(c);
+  const skip = body.skip_llm === true || body.skip_llm === "1" || body.mode === "deterministic";
+  if (skip) return false;
+  if (path === "/api/ask" || path === "/api/ask/") {
+    const q = String(body.question || "").trim();
+    if (!q || isOutOfScopeQuestion(q)) return false;
+    if (!/^\s*(with|select)\b/i.test(q) && matchAskTemplate(q)) return false;
+  }
+  return true;
+}
+
 export async function authMiddleware(c: AuthCtx, next: Next): Promise<Response | void> {
   const url = new URL(c.req.url);
   const path = url.pathname;
@@ -169,10 +196,10 @@ export async function authMiddleware(c: AuthCtx, next: Next): Promise<Response |
     throw new HTTPException(403, { message: "You do not have permission for this action." });
   }
 
-  if (isAiLimitedPath(method, path)) {
+  if (isAiLimitedPath(method, path) && (await requestUsesWorkersAi(c, path))) {
     const ip = clientIp(c.req);
-    const sessionHit = await hitRateLimit(`ai:sess:${user.id}`, AI_MAX_PER_SESSION, AI_WINDOW_SEC);
-    const ipHit = await hitRateLimit(`ai:ip:${ip}`, AI_MAX_PER_IP, AI_WINDOW_SEC);
+    const sessionHit = await hitRateLimit(`ailm:sess:${user.id}`, AI_MAX_PER_SESSION, AI_WINDOW_SEC);
+    const ipHit = await hitRateLimit(`ailm:ip:${ip}`, AI_MAX_PER_IP, AI_WINDOW_SEC);
     if (!sessionHit.ok || !ipHit.ok) {
       const retry = Math.max(sessionHit.retryAfterSec, ipHit.retryAfterSec);
       throw new HTTPException(429, { message: `Too many AI requests. Try again in ${retry} seconds.` });
