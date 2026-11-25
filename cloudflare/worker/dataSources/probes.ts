@@ -1,5 +1,7 @@
 import { neon } from "@neondatabase/serverless";
 import type { ConnectorDef } from "./catalog";
+import { listHyperdriveBindingNames, probeHyperdrive, probeTunnelHealth } from "./relay";
+import { parseSample } from "./fileParsers";
 
 export type ProbeResult = {
   ok: boolean;
@@ -101,23 +103,58 @@ export async function runProbe(
   connector: ConnectorDef,
   config: Record<string, string>,
   creds: Record<string, string>,
+  env?: unknown,
 ): Promise<ProbeResult> {
   const t0 = Date.now();
   const secrets = Object.values(creds).filter(Boolean);
   const cfg = { ...config };
   const get = (name: string) => need(creds, cfg, name);
 
-  if (connector.sync_mode === "gateway") {
-    const gateway = get("gateway_url");
-    if (!gateway) {
-      return {
-        ok: false,
-        probe: connector.probe_name,
-        latency_ms: Date.now() - t0,
-        message: connector.honesty,
-      };
+  const hyperKind = hyperdriveKind(connector.id, get("engine"), get("relay_mode"));
+  if (get("hyperdrive_binding") && hyperKind) {
+    return probeHyperdrive(env, get("hyperdrive_binding"), hyperKind, secrets, t0);
+  }
+  if (connector.id === "mysql" || (connector.id === "custom_database" && get("relay_mode") === "hyperdrive")) {
+    if (hyperKind) {
+      return probeHyperdrive(env, get("hyperdrive_binding"), hyperKind, secrets, t0);
     }
-    return probeGateway(gateway, connector.probe_name, secrets, t0);
+  }
+
+  const sampleUrl = get("sample_url") || (connector.sync_mode === "file" || connector.id === "https_file_drop" || connector.id === "rbi_reference" || connector.id === "fedai" ? get("file_url") : "");
+  if (connector.sync_mode === "file" || (connector.parser && sampleUrl)) {
+    if (!sampleUrl) {
+      return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "Provide an HTTPS sample file URL (or upload CSV text). Test does not invent a successful parse without input." };
+    }
+    return probeSampleFile(connector, sampleUrl, get, secrets, t0);
+  }
+  if (connector.id === "https_file_drop" || connector.id === "rbi_reference" || (connector.id === "fedai" && get("file_url"))) {
+    const url = get("file_url");
+    if (!url) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "An HTTPS file URL is required. Test will not invent a successful fetch." };
+    return probeGenericHttp(url, get, secrets, t0, connector.probe_name);
+  }
+
+  if (get("gateway_url") && (connector.sync_mode === "gateway" || connector.relay === "tunnel" || connector.id === "custom_database")) {
+    return probeTunnelHealth(get("gateway_url"), get("access_client_id"), get("access_client_secret"), secrets, connector.probe_name, t0);
+  }
+
+  if (connector.sync_mode === "gateway") {
+    return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: connector.honesty };
+  }
+
+  if (connector.sync_mode === "planned" && !get("base_url") && !get("http_url") && !get("file_url")) {
+    return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: connector.honesty };
+  }
+
+  if (connector.id === "custom_database") return probeCustomDatabase(connector, get, secrets, env, t0);
+  if (connector.id === "rest_api" || get("base_url")) {
+    if (connector.id === "braintree") {
+      /* fall through to switch */
+    } else if (connector.id !== "adyen" && connector.id !== "s3_file_drop") {
+      const handled = ["snowflake","databricks","aws_s3","gcs","bigquery","azure_blob","postgres","stripe","chargebee","zuora","recurly","razorpay","quickbooks","xero","zoho_books","netsuite","freshbooks"];
+      if (!handled.includes(connector.id) || connector.sync_mode === "planned") {
+        return probeGenericHttp(joinUrl(get("base_url") || get("http_url"), get("test_path")), get, secrets, t0, connector.probe_name, get("json_path"));
+      }
+    }
   }
 
   try {
@@ -196,11 +233,45 @@ export async function runProbe(
       }
       case "postgres": {
         const uri = get("connection_uri");
-        if (!uri) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "A Postgres connection URI is required." };
+        if (!uri) {
+          return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: `A Neon/HTTP connection URI or a Hyperdrive binding is required. Raw TCP to port 5432 is not available. Attached Hyperdrive bindings: ${listHyperdriveBindingNames(env).join(", ") || "none"}.` };
+        }
         if (!/^postgres(ql)?:\/\//i.test(uri)) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "The URI must start with postgres:// or postgresql://." };
         const sql = neon(uri, { fetchOptions: { timeout: TIMEOUT_MS } });
         await sql.query("SELECT 1 AS ok");
         return { ok: true, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "SELECT 1 succeeded over the Neon HTTP driver." };
+      }
+      case "s3_file_drop": {
+        const bucket = get("bucket");
+        const region = get("region");
+        const access = get("access_key_id");
+        const secret = get("secret_access_key");
+        if (!bucket || !region || !access || !secret) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "Bucket, region, access key and secret key are required." };
+        return awsListObjects(region, bucket, get("prefix"), access, secret, secrets);
+      }
+      case "adyen": {
+        const base = (get("base_url") || "https://management-test.adyen.com").replace(/\/$/, "");
+        const key = get("api_key") || get("access_token");
+        if (!key) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "An Adyen API key is required." };
+        const path = get("test_path") || "/v3/me";
+        const res = await timedFetch(`${base}${path.startsWith("/") ? path : "/" + path}`, { headers: { "X-API-Key": key, accept: "application/json" } }, secrets);
+        return { ok: res.ok, http_status: res.status, probe: connector.probe_name, latency_ms: Date.now() - t0, message: res.ok ? `Adyen ${path} succeeded.` : `Adyen HTTP ${res.status}. ${res.text}` };
+      }
+      case "braintree": {
+        const base = (get("base_url") || "https://payments.sandbox.braintree-api.com").replace(/\/$/, "");
+        const token = get("access_token") || get("api_key");
+        if (!token) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "A Braintree access token is required." };
+        const res = await timedFetch(`${base}/graphql`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "braintree-version": "2024-01-01" }, body: JSON.stringify({ query: "{ ping }" }) }, secrets);
+        return { ok: res.ok, http_status: res.status, probe: connector.probe_name, latency_ms: Date.now() - t0, message: res.ok ? "Braintree GraphQL ping accepted." : `Braintree HTTP ${res.status}. ${res.text}` };
+      }
+      case "cashfree": {
+        const base = (get("base_url") || "https://sandbox.cashfree.com").replace(/\/$/, "");
+        const id = get("client_id") || get("username");
+        const secret = get("client_secret") || get("api_key") || get("password");
+        if (!id || !secret) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "Cashfree client ID and secret are required." };
+        const path = get("test_path") || "/pg/settlements";
+        const res = await timedFetch(`${base}${path.startsWith("/") ? path : "/" + path}`, { headers: { "x-client-id": id, "x-client-secret": secret, "x-api-version": "2023-08-01", accept: "application/json" } }, secrets);
+        return { ok: res.ok, http_status: res.status, probe: connector.probe_name, latency_ms: Date.now() - t0, message: res.ok ? "Cashfree settlements probe succeeded." : `Cashfree HTTP ${res.status}. ${res.text}` };
       }
       case "stripe": {
         const key = get("secret_key");
@@ -290,4 +361,106 @@ export async function runProbe(
   } catch (err) {
     return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: sanitize(err instanceof Error ? err.message : String(err), secrets) };
   }
+}
+
+
+function hyperdriveKind(connectorId: string, engine: string, relay: string): "mysql" | "postgres" | null {
+  if (connectorId === "mysql") return "mysql";
+  if (connectorId === "postgres") return "postgres";
+  if (connectorId === "custom_database" && (relay === "hyperdrive" || !relay)) {
+    if (engine === "mysql" || engine === "mariadb") return "mysql";
+    if (engine === "postgres" || engine === "redshift") return "postgres";
+  }
+  return null;
+}
+
+function joinUrl(base: string, path: string): string {
+  const b = (base || "").trim().replace(/\/$/, "");
+  const p = (path || "").trim();
+  if (!b) return p;
+  if (!p) return b;
+  return p.startsWith("http") ? p : `${b}${p.startsWith("/") ? p : "/" + p}`;
+}
+
+function authHeaders(get: (n: string) => string): Record<string, string> {
+  const headers: Record<string, string> = { accept: "application/json, text/plain, */*" };
+  const typ = get("auth_type") || (get("access_token") ? "bearer" : get("api_key") ? "api_key_header" : get("username") && get("password") ? "basic" : "none");
+  if (typ === "bearer" && get("access_token")) headers.authorization = `Bearer ${get("access_token")}`;
+  if (typ === "basic" && get("username")) headers.authorization = `Basic ${btoa(`${get("username")}:${get("password")}`)}`;
+  if (typ === "api_key_header" && get("api_key")) headers[get("api_key_name") || "X-API-Key"] = get("api_key");
+  if (get("client_id") && get("client_secret") && !headers["x-client-id"]) {
+    /* cashfree-style keys may already have been set by a dedicated case */
+  }
+  if (get("access_client_id")) headers["CF-Access-Client-Id"] = get("access_client_id");
+  if (get("access_client_secret")) headers["CF-Access-Client-Secret"] = get("access_client_secret");
+  return headers;
+}
+
+async function probeGenericHttp(url: string, get: (n: string) => string, secrets: string[], t0: number, probe: string, jsonPath = ""): Promise<ProbeResult> {
+  if (!url) return { ok: false, probe, latency_ms: Date.now() - t0, message: "A HTTPS URL is required." };
+  let u: URL;
+  try { u = new URL(url); } catch { return { ok: false, probe, latency_ms: Date.now() - t0, message: "The URL is not valid." }; }
+  const headers = authHeaders(get);
+  if ((get("auth_type") || "") === "api_key_query" && get("api_key")) {
+    u.searchParams.set(get("api_key_name") || "api_key", get("api_key"));
+  }
+  try {
+    const res = await timedFetch(u.toString(), { headers }, secrets);
+    if (!res.ok) return { ok: false, http_status: res.status, probe, latency_ms: Date.now() - t0, message: `HTTP ${res.status} from ${u.origin}${u.pathname}. ${res.text}` };
+    if (jsonPath) {
+      try {
+        const body = JSON.parse(res.text);
+        let cur: unknown = body;
+        for (const part of jsonPath.split(".").filter(Boolean)) {
+          if (cur == null || typeof cur !== "object" || !(part in (cur as Record<string, unknown>))) {
+            return { ok: false, http_status: res.status, probe, latency_ms: Date.now() - t0, message: `HTTP ${res.status}, but JSON path "${jsonPath}" was not found.` };
+          }
+          cur = (cur as Record<string, unknown>)[part];
+        }
+        return { ok: true, http_status: res.status, probe, latency_ms: Date.now() - t0, message: `HTTP ${res.status} and JSON path "${jsonPath}" was present.` };
+      } catch {
+        return { ok: false, http_status: res.status, probe, latency_ms: Date.now() - t0, message: `HTTP ${res.status}, but the body was not JSON so path "${jsonPath}" could not be checked.` };
+      }
+    }
+    return { ok: true, http_status: res.status, probe, latency_ms: Date.now() - t0, message: `HTTP ${res.status} from ${u.origin}${u.pathname} (${res.text.length} bytes in the truncated body).` };
+  } catch (err) {
+    return { ok: false, probe, latency_ms: Date.now() - t0, message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function probeSampleFile(connector: ConnectorDef, url: string, get: (n: string) => string, secrets: string[], t0: number): Promise<ProbeResult> {
+  try {
+    const headers = authHeaders(get);
+    const res = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(buf);
+    if (!res.ok) return { ok: false, http_status: res.status, probe: connector.probe_name, latency_ms: Date.now() - t0, message: `Sample URL responded HTTP ${res.status}. A parse was not attempted.` };
+    let kind = connector.parser || "csv";
+    if (connector.id === "iso8583_auth_log" && get("format") === "iso8583_binary") kind = "iso8583_binary";
+    const parsed = parseSample(kind, url.split("?")[0].split("/").pop() || "sample", text, buf, get("delimiter") || ",");
+    return { ok: parsed.ok, http_status: res.status, probe: connector.probe_name, latency_ms: Date.now() - t0, message: parsed.message };
+  } catch (err) {
+    return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function probeCustomDatabase(connector: ConnectorDef, get: (n: string) => string, secrets: string[], env: unknown, t0: number): Promise<ProbeResult> {
+  const engine = get("engine");
+  const relay = get("relay_mode");
+  if (!engine || !relay) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "Choose an engine and a relay. Test will not assume a successful connection." };
+  if (relay === "hyperdrive") {
+    const kind = hyperdriveKind("custom_database", engine, relay);
+    if (!kind) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: `Hyperdrive on this Worker supports Postgres and MySQL/MariaDB (and Postgres-compatible Redshift). ${engine} needs a Tunnel or a HTTPS API instead.` };
+    return probeHyperdrive(env, get("hyperdrive_binding"), kind, secrets, t0);
+  }
+  if (relay === "http") {
+    const url = get("http_url") || get("base_url");
+    if (!url) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "Direct HTTP requires an HTTP API URL (ClickHouse, Elasticsearch, BigQuery, or similar). Raw TCP engines cannot be tested this way." };
+    return probeGenericHttp(url, get, secrets, t0, connector.probe_name);
+  }
+  if (relay === "tunnel") {
+    if (!get("gateway_url")) return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: "Tunnel relay requires a HTTPS gateway URL. This app does not create a tunnel in your account." };
+    return probeTunnelHealth(get("gateway_url"), get("access_client_id"), get("access_client_secret"), secrets, connector.probe_name, t0);
+  }
+  return { ok: false, probe: connector.probe_name, latency_ms: Date.now() - t0, message: connector.honesty };
 }

@@ -1,39 +1,28 @@
-export type ConnectorCategory = "warehouse" | "object_storage" | "database" | "billing" | "invoicing";
-export type SyncMode = "http" | "gateway";
-export type FieldType = "text" | "password" | "url" | "select" | "textarea";
+import { PAYMENT_CONNECTORS } from "./catalogPayment";
+import {
+  ACCESS_FIELDS,
+  HYPERDRIVE_SETUP_STEPS,
+  TUNNEL_SETUP_STEPS,
+  f,
+  type ConnectorDef,
+  type CatalogField,
+  type ConnectorCategory,
+  type SyncMode,
+  type RelayKind,
+  type FieldType,
+  type MappingTarget,
+} from "./catalogShared";
 
-export type CatalogField = {
-  name: string;
-  label: string;
-  type: FieldType;
-  required?: boolean;
-  secret?: boolean;
-  placeholder?: string;
-  help?: string;
-  options?: { value: string; label: string }[];
-  config?: boolean; // stored in config_json even if secret=false; default: !secret
+export type {
+  ConnectorDef,
+  CatalogField,
+  ConnectorCategory,
+  SyncMode,
+  RelayKind,
+  FieldType,
+  MappingTarget,
 };
-
-export type MappingTarget = {
-  id: string;
-  table: string;
-  label: string;
-  fields: string[];
-};
-
-export type ConnectorDef = {
-  id: string;
-  title: string;
-  vendor: string;
-  category: ConnectorCategory;
-  sync_mode: SyncMode;
-  summary: string;
-  honesty: string;
-  docs_url?: string;
-  fields: CatalogField[];
-  mapping_targets: string[];
-  probe_name: string;
-};
+export { ACCESS_FIELDS, HYPERDRIVE_SETUP_STEPS, TUNNEL_SETUP_STEPS, f } from "./catalogShared";
 
 export const MAPPING_TARGETS: MappingTarget[] = [
   { id: "authorizations", table: "ra_authorizations", label: "Authorizations", fields: ["auth_id", "merchant_id", "ts", "amount", "currency", "scheme", "status"] },
@@ -54,10 +43,6 @@ const INVOICE_TARGETS = ["invoices", "gateway_charges", "payouts"];
 const WAREHOUSE_TARGETS = ["authorizations", "captures", "scheme_settlements", "bank_transactions", "invoices", "payouts"];
 const OBJECT_TARGETS = ["objects", "scheme_settlements", "bank_transactions"];
 const DB_TARGETS = WAREHOUSE_TARGETS;
-
-function f(name: string, label: string, type: FieldType, extra: Partial<CatalogField> = {}): CatalogField {
-  return { name, label, type, ...extra };
-}
 
 export const CONNECTORS: ConnectorDef[] = [
   {
@@ -178,32 +163,45 @@ export const CONNECTORS: ConnectorDef[] = [
     category: "database",
     sync_mode: "http",
     summary: "SQL over Neon’s HTTP driver (or another HTTP Postgres gateway).",
-    honesty: "A Cloudflare Worker on the free plan cannot open a raw TCP connection to port 5432. This connector uses the Neon HTTP driver, which works for Neon (and other HTTP Postgres endpoints). A conventional self-hosted Postgres without an HTTP proxy will fail the test — that is expected. Cloudflare Hyperdrive is an option if you later move off the free plan.",
+    honesty: "A Cloudflare Worker cannot open a raw TCP connection to port 5432. Neon and other HTTP Postgres endpoints can be tested with a connection URI via the Neon HTTP driver. For a conventional Postgres, create a Hyperdrive config on the Workers free plan (100,000 queries/day) and bind it in wrangler.jsonc — this app will not create that config for you. When the binding name you enter is present, Test runs SELECT 1 through Hyperdrive and reports the real result. If the binding is missing, Test fails.",
     docs_url: "https://www.neondatabase.com/docs/serverless/serverless-driver",
     fields: [
-      f("connection_uri", "Connection URI", "password", { required: true, secret: true, placeholder: "postgresql://user:pass@host/db?sslmode=require" }),
+      f("connection_uri", "Neon or HTTP connection URI", "password", { secret: true, placeholder: "postgresql://user:pass@host/db?sslmode=require", help: "Used with the Neon HTTP driver. Not required when you test through Hyperdrive." }),
+      f("host", "Host (non-Neon)", "text"),
+      f("port", "Port", "text", { placeholder: "5432" }),
+      f("database", "Database", "text"),
+      f("username", "Username", "text"),
+      f("password", "Password", "password", { secret: true }),
+      f("hyperdrive_binding", "Hyperdrive binding name", "text", { placeholder: "HYPERDRIVE_POSTGRES", help: "Must match a hyperdrive.binding in wrangler.jsonc after you create the config and redeploy." }),
     ],
     mapping_targets: DB_TARGETS,
-    probe_name: "SELECT 1 via Neon HTTP driver",
+    probe_name: "SELECT 1 via Neon HTTP or Hyperdrive",
+    relay: "hyperdrive",
+    setup_title: "Hyperdrive for non-Neon Postgres",
+    setup_steps: HYPERDRIVE_SETUP_STEPS,
   },
   {
     id: "mysql",
     title: "MySQL",
     vendor: "MySQL",
     category: "database",
-    sync_mode: "gateway",
-    summary: "Configuration only unless you provide an HTTPS gateway.",
-    honesty: "Workers on the free plan cannot open a raw MySQL TCP socket. Cloudflare Hyperdrive can proxy MySQL on a paid Workers plan; otherwise you need your own HTTPS gateway. If you paste a gateway URL, the test will call it and report the real HTTP status. Without one, Test will not succeed.",
+    sync_mode: "hyperdrive",
+    summary: "MySQL via Hyperdrive (free plan) or an HTTPS gateway.",
+    honesty: "This Worker cannot open a raw MySQL TCP socket. Create a Hyperdrive config on the Workers free plan (100,000 queries/day) and bind it — this app will not create that config for you. When the binding is present, Test runs SELECT 1 through it and reports the real result. You can instead paste an HTTPS gateway URL; Test then reports the live HTTP status. Without a binding or gateway, Test fails.",
     fields: [
       f("host", "Host", "text", { required: true }),
       f("port", "Port", "text", { placeholder: "3306" }),
       f("database", "Database", "text"),
       f("username", "Username", "text"),
       f("password", "Password", "password", { secret: true }),
-      f("gateway_url", "HTTPS gateway URL", "url", { help: "Optional. If set, Test sends a GET and reports the live response." }),
+      f("hyperdrive_binding", "Hyperdrive binding name", "text", { placeholder: "HYPERDRIVE_MYSQL", help: "Must match a hyperdrive.binding in wrangler.jsonc after you create the config and redeploy." }),
+      f("gateway_url", "HTTPS gateway URL", "url", { help: "Optional alternative to Hyperdrive. Test sends GET and reports the live response." }),
     ],
     mapping_targets: DB_TARGETS,
-    probe_name: "Gateway GET only (no raw TCP)",
+    probe_name: "Hyperdrive SELECT 1 or gateway GET",
+    relay: "hyperdrive",
+    setup_title: "Hyperdrive for MySQL",
+    setup_steps: HYPERDRIVE_SETUP_STEPS,
   },
   {
     id: "mongodb",
@@ -212,16 +210,19 @@ export const CONNECTORS: ConnectorDef[] = [
     category: "database",
     sync_mode: "gateway",
     summary: "Configuration only unless you provide an HTTPS Data API or gateway.",
-    honesty: "The MongoDB wire protocol is TCP and is not available from a free-plan Worker. The Atlas Data API (if you still have an endpoint) or a custom HTTPS gateway can be tested if you provide its URL. Otherwise Test will not succeed.",
+    honesty: "The MongoDB wire protocol is TCP and is not available from this Worker. Use a Cloudflare Tunnel (cloudflared) in front of a small HTTPS gateway, or an Atlas Data API URL. This app will not create a tunnel for you. Test calls the gateway health endpoint (with Access service-token headers when provided) and reports the live status. Without a reachable HTTPS URL, Test fails.",
     fields: [
       f("srv", "Connection SRV / host", "text", { required: true, placeholder: "cluster.abc.mongodb.net" }),
       f("database", "Database", "text"),
       f("username", "Username", "text"),
       f("password", "Password", "password", { secret: true }),
-      f("gateway_url", "HTTPS Data API or gateway URL", "url"),
+      ...ACCESS_FIELDS,
     ],
     mapping_targets: DB_TARGETS,
-    probe_name: "Gateway GET only (no Mongo TCP)",
+    probe_name: "Tunnel or Data API health GET",
+    relay: "tunnel",
+    setup_title: "Cloudflare Tunnel for MongoDB",
+    setup_steps: TUNNEL_SETUP_STEPS,
   },
   {
     id: "oracle",
@@ -230,17 +231,20 @@ export const CONNECTORS: ConnectorDef[] = [
     category: "database",
     sync_mode: "gateway",
     summary: "Configuration only — Oracle Net/TCPS is not reachable from this Worker.",
-    honesty: "Oracle Database connections use Oracle Net (TCP/TCPS), which a Cloudflare Worker on the free plan cannot open. There is no Hyperdrive target for Oracle here. Save the form for inventory, or point gateway_url at a TLS service you operate. Test will not succeed without a reachable HTTPS gateway.",
+    honesty: "Oracle Database connections use Oracle Net (TCP/TCPS). There is no Hyperdrive target for Oracle. Use a Cloudflare Tunnel in front of a small HTTPS gateway that can speak Oracle Net. This app will not create a tunnel for you. Test calls the gateway health endpoint (with Access service-token headers when provided) and reports the live status. Without a reachable HTTPS URL, Test fails.",
     fields: [
       f("host", "Host", "text", { required: true }),
       f("port", "Port", "text", { placeholder: "1521" }),
       f("service_name", "Service name", "text"),
       f("username", "Username", "text"),
       f("password", "Password", "password", { secret: true }),
-      f("gateway_url", "HTTPS gateway URL", "url"),
+      ...ACCESS_FIELDS,
     ],
     mapping_targets: DB_TARGETS,
-    probe_name: "Gateway GET only (no Oracle Net)",
+    probe_name: "Tunnel gateway health GET",
+    relay: "tunnel",
+    setup_title: "Cloudflare Tunnel for Oracle",
+    setup_steps: TUNNEL_SETUP_STEPS,
   },
   {
     id: "hive",
@@ -249,17 +253,20 @@ export const CONNECTORS: ConnectorDef[] = [
     category: "warehouse",
     sync_mode: "gateway",
     summary: "Configuration only — HiveServer2/Thrift is not reachable from this Worker.",
-    honesty: "HiveServer2 speaks Thrift/TCP (or JDBC), not a public HTTPS SQL API that this Worker can call on the free plan. Save the form, or provide an HTTPS gateway URL. Test will not succeed without one.",
+    honesty: "HiveServer2 speaks Thrift/TCP (or JDBC), not a public HTTPS SQL API. Use a Cloudflare Tunnel in front of a small HTTPS gateway. This app will not create a tunnel for you. Test calls the gateway health endpoint (with Access service-token headers when provided) and reports the live status. Without a reachable HTTPS URL, Test fails.",
     fields: [
       f("host", "HiveServer2 host", "text", { required: true }),
       f("port", "Port", "text", { placeholder: "10000" }),
       f("database", "Database", "text"),
       f("username", "Username", "text"),
       f("password", "Password", "password", { secret: true }),
-      f("gateway_url", "HTTPS gateway URL", "url"),
+      ...ACCESS_FIELDS,
     ],
     mapping_targets: WAREHOUSE_TARGETS,
-    probe_name: "Gateway GET only (no Thrift/TCP)",
+    probe_name: "Tunnel gateway health GET",
+    relay: "tunnel",
+    setup_title: "Cloudflare Tunnel for Hive",
+    setup_steps: TUNNEL_SETUP_STEPS,
   },
   {
     id: "stripe",
@@ -426,6 +433,7 @@ export const CONNECTORS: ConnectorDef[] = [
     mapping_targets: INVOICE_TARGETS,
     probe_name: "GET /accounting/account/{id}/invoices/invoices?per_page=1",
   },
+  ...PAYMENT_CONNECTORS,
 ];
 
 export function getConnector(id: string): ConnectorDef | undefined {
@@ -445,5 +453,9 @@ export function publicCatalog() {
     fields: c.fields.map(({ secret, ...rest }) => ({ ...rest, secret: Boolean(secret) })),
     mapping_targets: c.mapping_targets,
     probe_name: c.probe_name,
+    relay: c.relay,
+    setup_title: c.setup_title,
+    setup_steps: c.setup_steps,
+    parser: c.parser,
   }));
 }

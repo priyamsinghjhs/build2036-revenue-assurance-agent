@@ -3,6 +3,7 @@ import type { Env } from "../types";
 import { getConnector, publicCatalog, MAPPING_TARGETS, type ConnectorDef } from "./catalog";
 import { decryptJson, encryptJson, kekConfigured, KekMissingError } from "./crypto";
 import { runProbe, type ProbeResult } from "./probes";
+import { listHyperdriveBindingNames } from "./relay";
 
 export type MappingRow = { target: string; source_field: string; dest_field: string };
 export type ConnectionRow = {
@@ -109,6 +110,7 @@ export async function overview(db: AppDb, env: Env) {
     catalog: publicCatalog(),
     mapping_targets: MAPPING_TARGETS,
     connections: rows.map((r) => publicConnection(r)),
+    hyperdrive_bindings: listHyperdriveBindingNames(env),
   };
 }
 
@@ -217,7 +219,7 @@ export async function testConnection(db: AppDb, env: Env, id: string): Promise<{
       return { status: 500, body: { error: message, ok: false } };
     }
   }
-  const result: ProbeResult = await runProbe(connector, row.config_json, creds);
+  const result: ProbeResult = await runProbe(connector, row.config_json, creds, env);
   const now = new Date().toISOString();
   const nextStatus = result.ok ? "tested" : row.credentials_enc || Object.keys(row.config_json).length ? "error" : "draft";
   await db
