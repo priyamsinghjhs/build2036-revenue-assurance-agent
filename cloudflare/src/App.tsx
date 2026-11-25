@@ -34,6 +34,7 @@ import {
   SlidersHorizontal,
   BrainCircuit,
   Database,
+  Settings,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import ExecutivePage from "@/pages/ExecutivePage";
@@ -56,6 +57,8 @@ import ReviewQueuePage from "@/pages/ReviewQueuePage";
 import ReviewPage from "@/pages/ReviewPage";
 import ModelsPage from "@/pages/ModelsPage";
 import OpenDataPage from "@/pages/OpenDataPage";
+import SettingsPage from "@/pages/SettingsPage";
+import DataSourcesPage from "@/pages/DataSourcesPage";
 import { FilterProvider, useFilters } from "@/filters";
 import { Select } from "@/components/ui/select";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -140,6 +143,13 @@ const GROUPS = [
       { to: "/investigate", label: "Investigate", icon: Search },
       { to: "/review", label: "Review queue", icon: Scale },
       { to: "/trace", label: "Transaction trace", icon: ScanSearch },
+    ],
+  },
+  {
+    label: "Settings",
+    items: [
+      { to: "/settings", label: "Settings", icon: Settings },
+      { to: "/settings/data-sources", label: "Data sources", icon: Database },
     ],
   },
 ];
@@ -310,6 +320,10 @@ function Shell() {
             <Route path="/routing" element={<RoutingPage />} />
             <Route path="/models" element={<ModelsPage />} />
             <Route path="/open-data" element={<OpenDataPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/data-sources" element={<DataSourcesPage />} />
+            <Route path="/settings/data-sources/new/:connectorId" element={<DataSourcesPage />} />
+            <Route path="/settings/data-sources/c/:connectionId" element={<DataSourcesPage />} />
             <Route path="/ask" element={<AskPage />} />
             <Route path="/cases" element={<CasesPage />} />
             <Route path="/risks" element={<RisksPage />} />

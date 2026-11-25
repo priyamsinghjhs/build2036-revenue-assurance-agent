@@ -11,6 +11,7 @@ export type Env = {
   AI: AiBinding;
   DATABASE_URL: string;
   ASSETS: Fetcher;
+  DATA_SOURCES_KEK?: string;
 };
 
 export type SettlementListRow = {

@@ -102,6 +102,12 @@ export const api = {
   simulateRouting: () => request<RoutingPayload>("/api/routing/simulate", { method: "POST", body: "{}" }),
   models: () => request<ModelsOverview>("/api/models"),
   openData: () => request<OpenDataPayload>("/api/open-data"),
+  dataSources: () => request<DataSourcesPayload>("/api/settings/data-sources"),
+  saveDataSource: (body: Record<string, unknown>, id?: string) => request<{ ok: boolean; connection: DataSourceConnection; error?: string }>(id ? `/api/settings/data-sources/${id}` : "/api/settings/data-sources", { method: id ? "PUT" : "POST", body: JSON.stringify(body) }),
+  deleteDataSource: (id: string) => request<{ ok: boolean }>(`/api/settings/data-sources/${id}`, { method: "DELETE" }),
+  testDataSource: (id: string) => request<DataSourceProbe>(`/api/settings/data-sources/${id}/test`, { method: "POST" }),
+  syncDataSource: (id: string) => request<DataSourceProbe>(`/api/settings/data-sources/${id}/sync`, { method: "POST" }),
+
   evidence: (exceptionId: string) => request<Record<string, unknown>>(`/api/agents/evidence?exception_id=${encodeURIComponent(exceptionId)}`),
 
   model: (id: string) => request<ModelDetail>(`/api/models/${encodeURIComponent(id)}`),
@@ -722,4 +728,68 @@ export type OpenDataPayload = {
     aml: { edges: number; laundering: number; scores?: { n: number; mean_score?: number; mean_labelled?: number; mean_unlabelled?: number } };
     db_size: { bytes: number; pretty: string } | null;
   };
+};
+
+
+export type DataSourceField = {
+  name: string;
+  label: string;
+  type: "text" | "password" | "url" | "select" | "textarea";
+  required?: boolean;
+  secret?: boolean;
+  placeholder?: string;
+  help?: string;
+  options?: { value: string; label: string }[];
+};
+
+export type DataSourceConnector = {
+  id: string;
+  title: string;
+  vendor: string;
+  category: "warehouse" | "object_storage" | "database" | "billing" | "invoicing";
+  sync_mode: "http" | "gateway";
+  summary: string;
+  honesty: string;
+  docs_url?: string;
+  fields: DataSourceField[];
+  mapping_targets: string[];
+  probe_name: string;
+};
+
+export type DataSourceConnection = {
+  connection_id: string;
+  connector_id: string;
+  name: string;
+  status: string;
+  config: Record<string, string>;
+  has_credentials: boolean;
+  mapping: { target: string; source_field: string; dest_field: string }[];
+  schedule_kind: string;
+  schedule_enabled: boolean;
+  last_test_at: string | null;
+  last_test_ok: boolean | null;
+  last_test_message: string | null;
+  last_sync_at: string | null;
+  last_sync_ok: boolean | null;
+  last_sync_message: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DataSourcesPayload = {
+  kek_configured: boolean;
+  note: string;
+  catalog: DataSourceConnector[];
+  mapping_targets: { id: string; table: string; label: string; fields: string[] }[];
+  connections: DataSourceConnection[];
+};
+
+export type DataSourceProbe = {
+  ok: boolean;
+  error?: string;
+  message?: string;
+  probe?: string;
+  http_status?: number;
+  latency_ms?: number;
+  connection?: DataSourceConnection;
 };

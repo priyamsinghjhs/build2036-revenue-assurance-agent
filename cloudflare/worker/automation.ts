@@ -6,6 +6,7 @@ import type { Env } from "./types";
 import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import { investigateAnomaly } from "./intel";
 import { runInvestigation } from "./investigateFlow";
+import { syncDue } from "./dataSources/store";
 
 function inr(n: number): string {
   const abs = Math.abs(n);
@@ -261,6 +262,12 @@ export async function runDailyAutomation(env: Env, opts: { force?: boolean; skip
     // A manual run (force) may still call the model, and falls back to deterministic bullets on error.
     detail.narrative = await upsertNarrative(env, exec, Boolean(opts.force) && !skipLlm);
     detail.actions_seeded = await seedProposedActions(db, run.run_id);
+    try {
+      const ds = await syncDue(db, env, 3);
+      detail.data_sources_synced = ds.length;
+    } catch (err) {
+      detail.data_sources_error = err instanceof Error ? err.message : String(err);
+    }
     if (skipLlm) {
       detail.investigation = { skipped: true, reason: "deterministic_cron", note: "Action proposals are seeded; investigator/auditor run when a human starts an investigation or a forced automation run." };
     } else {

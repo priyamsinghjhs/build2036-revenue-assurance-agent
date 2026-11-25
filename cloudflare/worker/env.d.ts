@@ -14,13 +14,44 @@ interface Fetcher {
   fetch(request: Request | string, init?: RequestInit): Promise<Response>;
 }
 
-interface Crypto { randomUUID(): string; }
+type BufferSource = ArrayBufferView | ArrayBuffer;
+interface CryptoKey {}
+interface SubtleCrypto {
+  importKey(format: string, keyData: BufferSource, algorithm: unknown, extractable: boolean, keyUsages: string[]): Promise<CryptoKey>;
+  encrypt(algorithm: { name: string; iv: BufferSource }, key: CryptoKey, data: BufferSource): Promise<ArrayBuffer>;
+  decrypt(algorithm: { name: string; iv: BufferSource }, key: CryptoKey, data: BufferSource): Promise<ArrayBuffer>;
+  sign(algorithm: unknown, key: CryptoKey, data: BufferSource): Promise<ArrayBuffer>;
+  digest(algorithm: string, data: BufferSource): Promise<ArrayBuffer>;
+}
+interface Crypto {
+  randomUUID(): string;
+  getRandomValues<T extends Uint8Array>(array: T): T;
+  subtle: SubtleCrypto;
+}
 declare const crypto: Crypto;
+declare function atob(data: string): string;
+declare function btoa(data: string): string;
+declare class TextEncoder { encode(input?: string): Uint8Array; }
+declare class TextDecoder { decode(input?: ArrayBuffer | Uint8Array): string; }
+declare class URLSearchParams {
+  constructor(init?: Record<string, string> | string);
+  set(name: string, value: string): void;
+  entries(): IterableIterator<[string, string]>;
+}
+declare class URL {
+  constructor(url: string);
+  readonly searchParams: URLSearchParams;
+  toString(): string;
+}
+declare class AbortSignal { static timeout(ms: number): AbortSignal; }
+declare function fetch(input: string, init?: RequestInit): Promise<Response>;
+
 
 interface RequestInit {
   method?: string;
   headers?: Record<string, string>;
-  body?: string;
+  body?: string | URLSearchParams;
+  signal?: AbortSignal;
 }
 
 interface ResponseInit {
@@ -34,6 +65,8 @@ declare class Request {
 
 declare class Response {
   constructor(body?: string, init?: ResponseInit);
+  readonly ok: boolean;
+  readonly status: number;
   text(): Promise<string>;
   clone(): Response;
 }

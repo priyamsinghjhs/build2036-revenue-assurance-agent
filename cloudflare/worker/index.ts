@@ -45,6 +45,7 @@ import { getModel, modelDetail, modelsOverview, predictFeatures } from "./ml/reg
 import { ASK_VIEWS, SUGGESTED_QUESTIONS } from "./askTemplates";
 import { prefetchEvidence, runInvestigation, sseResponse } from "./investigateFlow";
 import { openDataOverview } from "./openData";
+import { overview as dataSourcesOverview, upsertConnection, deleteConnection, testConnection, syncConnection } from "./dataSources/store";
 import { decideAuditorSuggestion, listSuggestionDecisions, type AuditSuggestion } from "./auditor";
 import { publicErrorMessage } from "../shared/errors";
 
@@ -248,6 +249,34 @@ app.post("/api/agents/investigate", async (c) => {
 });
 
 app.get("/api/open-data", async (c) => c.json(await openDataOverview(getDb(c.env))));
+
+app.get("/api/settings/data-sources", async (c) => c.json(await dataSourcesOverview(getDb(c.env), c.env)));
+app.post("/api/settings/data-sources", async (c) => {
+  const body = await readJson(c);
+  const result = await upsertConnection(getDb(c.env), c.env, body);
+  if (!result.ok) return c.json({ error: result.error }, result.status as 400 | 503);
+  return c.json(result);
+});
+app.put("/api/settings/data-sources/:id", async (c) => {
+  const body = await readJson(c);
+  body.connection_id = c.req.param("id");
+  const result = await upsertConnection(getDb(c.env), c.env, body);
+  if (!result.ok) return c.json({ error: result.error }, result.status as 400 | 503);
+  return c.json(result);
+});
+app.delete("/api/settings/data-sources/:id", async (c) => {
+  const ok = await deleteConnection(getDb(c.env), c.req.param("id"));
+  return c.json({ ok }, (ok ? 200 : 404) as 200 | 404);
+});
+app.post("/api/settings/data-sources/:id/test", async (c) => {
+  const result = await testConnection(getDb(c.env), c.env, c.req.param("id"));
+  return c.json(result.body, result.status as 200 | 400 | 404 | 500 | 503);
+});
+app.post("/api/settings/data-sources/:id/sync", async (c) => {
+  const result = await syncConnection(getDb(c.env), c.env, c.req.param("id"));
+  return c.json(result.body, result.status as 200 | 400 | 404 | 500 | 503);
+});
+
 
 // Legacy settlement + 5-agent endpoints (still used if a settlement is investigated)
 app.get("/api/settlements", async (c) => {

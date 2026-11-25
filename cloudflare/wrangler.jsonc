@@ -20,4 +20,5 @@
   },
   // Runtime database is Neon Postgres via secret DATABASE_URL
   // (npx wrangler secret put DATABASE_URL). Do not add a D1 binding.
+  // Credential envelope: npx wrangler secret put DATA_SOURCES_KEK (32-byte key, base64). Never commit it.
 }

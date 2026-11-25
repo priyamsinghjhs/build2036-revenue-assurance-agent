@@ -83,5 +83,7 @@ export const TITLES: Record<string, string> = {
   "/review": "Review queue",
   "/models": "Model intelligence",
   "/open-data": "Open data sources",
+  "/settings": "Settings",
+  "/settings/data-sources": "Data sources",
   "/false-declines": "False declines",
 };

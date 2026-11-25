@@ -99,6 +99,7 @@ async function sectionLiveApi() {
     ["/api/models", (b) => Array.isArray(b.cards) && b.kpis],
     ["/api/areas/false_declines", (b) => b.summary || b.exceptions || b.meta],
     ["/api/open-data", (b) => Array.isArray(b.datasets) && b.figures && b.guard],
+    ["/api/settings/data-sources", (b) => Array.isArray(b.catalog) && b.catalog.length >= 20 && Array.isArray(b.connections)],
   ];
   const latencies = [];
   let fail = 0;
@@ -610,7 +611,7 @@ const PAGES = [
   "/", "/lifecycle", "/agents", "/investigate", "/controls", "/trace", "/network-risk",
   "/contracts", "/anomalies", "/routing", "/ask", "/cases", "/risks", "/files",
   "/ingestion", "/review", "/authorization", "/scheme", "/bank", "/fees", "/aml", "/tax", "/kyc",
-  "/models", "/false-declines", "/open-data",
+  "/models", "/false-declines", "/open-data", "/settings", "/settings/data-sources",
 ];
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const errors = [];
@@ -738,6 +739,31 @@ for (const w of WIDTHS) {
       if (!od.hasLicense) errors.push({ w, type: "open-data", msg: "License/attribution missing", url: "/open-data" });
       if (!od.hasPsi) errors.push({ w, type: "open-data", msg: "RBI PSI row/notes missing", url: "/open-data" });
       await page.screenshot({ path: "/workspace/verify/v10-open-data.png", fullPage: true });
+    }
+    if (w === 1440 && path === "/settings/data-sources") {
+      await page.getByTestId("data-sources-page").waitFor({ timeout: 15000 }).catch(() => {});
+      const ds = await page.evaluate(() => {
+        const pageEl = document.querySelector('[data-testid="data-sources-page"]');
+        const text = pageEl ? pageEl.innerText : document.body.innerText;
+        const badges = [...document.querySelectorAll('[data-testid="sync-mode-badge"]')].map((el) => el.textContent || "");
+        const http = badges.filter((b) => /live http/i.test(b)).length;
+        const gateway = badges.filter((b) => /gateway|config only/i.test(b)).length;
+        return { hasPage: !!pageEl, hasStripe: /Stripe/i.test(text), hasOracle: /Oracle/i.test(text), http, gateway, leakedSecret: /sk_live_|AWS4|BEGIN RSA/i.test(text) };
+      });
+      if (!ds.hasPage) errors.push({ w, type: "data-sources", msg: "Data sources catalog missing", url: path });
+      if (!ds.hasStripe || !ds.hasOracle) errors.push({ w, type: "data-sources", msg: "Expected Stripe and Oracle in the catalog", url: path });
+      if (ds.http < 1 || ds.gateway < 1) errors.push({ w, type: "data-sources", msg: "Expected both live HTTP and gateway badges", url: path });
+      if (ds.leakedSecret) errors.push({ w, type: "data-sources", msg: "Possible secret material in the catalog", url: path });
+      await page.screenshot({ path: "/workspace/verify/v10-datasources-catalog.png", fullPage: true });
+      await page.goto(BASE + "/settings/data-sources/new/oracle", { waitUntil: "networkidle", timeout: 45000 }).catch((e) => errors.push({ w, type: "nav", msg: String(e), url: "/settings/data-sources/new/oracle" }));
+      const form = await page.evaluate(() => {
+        const el = document.querySelector('[data-testid="data-source-form"]');
+        const text = el ? el.innerText : "";
+        const honesty = document.querySelector('[data-testid="connector-honesty"]')?.textContent || "";
+        return { hasForm: !!el, honesty: honesty.slice(0, 240), mentionsTcp: /TCP|Oracle Net|free plan/i.test(honesty + text) };
+      });
+      if (!form.hasForm || !form.mentionsTcp) errors.push({ w, type: "data-sources", msg: "Oracle form missing an honest TCP/gateway note", url: "/settings/data-sources/new/oracle" });
+      await page.screenshot({ path: "/workspace/verify/v10-datasources-oracle.png", fullPage: true });
     }
     if (w === 1440 && path === "/investigate") {
       const payout = "/investigate/" + encodeURIComponent("payouts:under_payout:PAY-MER002-2026-10");
@@ -1078,6 +1104,24 @@ async function sectionAccuracy() {
   return ok;
 }
 
+
+async function sectionDataSources() {
+  const r = await api("/api/settings/data-sources");
+  const b = r.body || {};
+  const catalog = b.catalog || [];
+  const stripe = catalog.find((c) => c.id === "stripe");
+  const oracle = catalog.find((c) => c.id === "oracle");
+  const ids = new Set(catalog.map((c) => c.id));
+  const required = ["snowflake","databricks","aws_s3","gcs","bigquery","azure_blob","oracle","hive","mysql","mongodb","postgres","stripe","chargebee","zuora","recurly","razorpay","quickbooks","xero","zoho_books","netsuite","freshbooks"];
+  const missing = required.filter((id) => !ids.has(id));
+  const leaked = JSON.stringify(b).includes("credentials_enc") || /sk_live_|DATA_SOURCES_KEK\s*=/.test(JSON.stringify(b));
+  const ok = r.ok && missing.length === 0 && stripe?.sync_mode === "http" && oracle?.sync_mode === "gateway" && !leaked && Array.isArray(b.connections);
+  card.add("file_parsers", { technical: ok ? "pass" : "fail" });
+  card.notes.push(`Data sources catalog ${catalog.length} connectors, missing=[${missing.join(",")}] stripe=${stripe?.sync_mode} oracle=${oracle?.sync_mode} kek=${b.kek_configured} leaked=${leaked}`);
+  if (!ok) card.remaining.push(`Data sources API unexpected: status=${r.status} missing=${missing.join(",")} leaked=${leaked}`);
+  return ok;
+}
+
 async function main() {
   console.log("Regression against", BASE, "results →", RESULTS);
   const sql = db();
@@ -1105,6 +1149,8 @@ async function main() {
   await sectionInvestigateCfg003();
   console.log("section: open data");
   await sectionOpenData();
+  console.log("section: data sources");
+  await sectionDataSources();
   console.log("section: perf budgets");
   await sectionPerf();
   console.log("section: accuracy");
