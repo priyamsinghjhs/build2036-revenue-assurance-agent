@@ -20,30 +20,5 @@
       "CLOUDFLARE_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
       "CF_ACCOUNT_ID": "95f96d50618b771a8c58542029828a1a"
     }
-  },
-  "containers": [
-    {
-      "class_name": "RevenueAssuranceContainer",
-      "scheduling_policy": "durable_object",
-      "images": {
-        "base": {
-          "dockerfile": "./Dockerfile"
-        }
-      }
-    }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "REVENUE_ASSURANCE",
-        "class_name": "RevenueAssuranceContainer"
-      }
-    ]
-  },
-  "exports": {
-    "RevenueAssuranceContainer": {
-      "type": "durable-object",
-      "storage": "sqlite"
-    }
   }
 }
