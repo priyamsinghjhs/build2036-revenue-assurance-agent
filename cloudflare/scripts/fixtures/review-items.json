@@ -1,0 +1,599 @@
+[
+  {
+    "exception_id": "aml:aml_velocity_spike:velocity_spike-MER006",
+    "review_status": "pending",
+    "action_json": {
+      "actions": [
+        {
+          "type": "escalate",
+          "amount": 271000,
+          "target": "MER006",
+          "currency": "INR",
+          "rationale": "velocity spike",
+          "confidence": 80
+        }
+      ]
+    },
+    "sql": {
+      "exception_id": "aml:aml_velocity_spike:velocity_spike-MER006",
+      "area": "aml",
+      "category": "aml_velocity_spike",
+      "ref_id": "velocity_spike-MER006",
+      "merchant_id": "MER006",
+      "expected_amount": "0.00",
+      "actual_amount": "271000.00",
+      "leakage": "271000.00",
+      "status": "unmatched"
+    },
+    "live_detail_exception": {
+      "area": "aml",
+      "category": "aml_velocity_spike",
+      "ref_id": "velocity_spike-MER006",
+      "merchant_id": "MER006",
+      "ts": "2026-10-24T09:00:00",
+      "expected_amount": "0.00",
+      "actual_amount": "271000.00",
+      "leakage": "271000.00",
+      "scheme": null,
+      "method": null,
+      "status": "unmatched",
+      "exception_id": "aml:aml_velocity_spike:velocity_spike-MER006"
+    }
+  },
+  {
+    "exception_id": "anomalies:approval_rate:approval_rate-UPI-20261018",
+    "review_status": "pending",
+    "action_json": {
+      "actions": [
+        {
+          "type": "dispute",
+          "amount": 11668.57,
+          "target": "MER-MER003",
+          "currency": "INR",
+          "rationale": "bad_card",
+          "confidence": 80
+        }
+      ],
+      "faithfulness": 1,
+      "verification": "grounded"
+    },
+    "sql": {
+      "exception_id": "anomalies:approval_rate:approval_rate-UPI-20261018",
+      "area": "anomalies",
+      "category": "approval_rate",
+      "ref_id": "approval_rate-UPI-20261018",
+      "merchant_id": null,
+      "expected_amount": "0.00",
+      "actual_amount": "0.52",
+      "leakage": "11668.60",
+      "status": "unmatched"
+    },
+    "live_detail_exception": {
+      "area": "anomalies",
+      "category": "approval_rate",
+      "ref_id": "approval_rate-UPI-20261018",
+      "merchant_id": null,
+      "ts": "2026-10-18",
+      "expected_amount": "0.00",
+      "actual_amount": "0.52",
+      "leakage": "11668.60",
+      "scheme": "UPI",
+      "method": "approval_rate",
+      "status": "unmatched",
+      "exception_id": "anomalies:approval_rate:approval_rate-UPI-20261018"
+    }
+  },
+  {
+    "exception_id": "anomalies:fee_ratio:fee_ratio-VISA-20261006",
+    "review_status": "pending",
+    "action_json": {
+      "actions": [
+        {
+          "type": "dispute",
+          "amount": 2000,
+          "target": "MER-MER005",
+          "currency": "INR",
+          "rationale": "linked_to_funded_changed_account",
+          "confidence": 80
+        }
+      ],
+      "faithfulness": 1,
+      "verification": "grounded"
+    },
+    "sql": null,
+    "live_detail_exception": null
+  },
+  {
+    "exception_id": "anomalies:fee_ratio:fee_ratio-VISA-20261012",
+    "review_status": "pending",
+    "action_json": {
+      "actions": [
+        {
+          "type": "recover",
+          "amount": 26.1,
+          "target": "MER-MER003",
+          "currency": "INR",
+          "rationale": "misconfigured_fee_structure",
+          "confidence": 80
+        }
+      ],
+      "faithfulness": 1,
+      "verification": "grounded"
+    },
+    "sql": {
+      "exception_id": "anomalies:fee_ratio:fee_ratio-VISA-20261012",
+      "area": "anomalies",
+      "category": "fee_ratio",
+      "ref_id": "fee_ratio-VISA-20261012",
+      "merchant_id": null,
+      "expected_amount": "0.00",
+      "actual_amount": "24.00",
+      "leakage": "26.10",
+      "status": "unmatched"
+    },
+    "live_detail_exception": {
+      "area": "anomalies",
+      "category": "fee_ratio",
+      "ref_id": "fee_ratio-VISA-20261012",
+      "merchant_id": null,
+      "ts": "2026-10-12",
+      "expected_amount": "0.00",
+      "actual_amount": "24.00",
+      "leakage": "26.10",
+      "scheme": "VISA",
+      "method": "fee_ratio",
+      "status": "unmatched",
+      "exception_id": "anomalies:fee_ratio:fee_ratio-VISA-20261012"
+    }
+  },
+  {
+    "exception_id": "cash_ar:unpaid_overdue:INV-MER003-2026-10",
+    "review_status": "pending",
+    "action_json": {
+      "actions": [
+        {
+          "type": "recover",
+          "amount": 15801.72,
+          "target": "MER003",
+          "currency": "INR",
+          "rationale": "Missing Payment Application",
+          "confidence": 90
+        }
+      ]
+    },
+    "sql": {
+      "exception_id": "cash_ar:unpaid_overdue:INV-MER003-2026-10",
+      "area": "cash_ar",
+      "category": "unpaid_overdue",
+      "ref_id": "INV-MER003-2026-10",
+      "merchant_id": "MER003",
+      "expected_amount": "15801.70",
+      "actual_amount": "0.00",
+      "leakage": "15801.70",
+      "status": "unmatched"
+    },
+    "live_detail_exception": {
+      "area": "pricing",
+      "category": "mdr_contract_variance",
+      "ref_id": "INV-MER003-2026-10",
+      "merchant_id": "MER003",
+      "ts": "2026-10",
+      "expected_amount": "8148.12",
+      "actual_amount": "7414.79",
+      "leakage": "733.33",
+      "scheme": null,
+      "method": null,
+      "status": "variance",
+      "exception_id": "pricing:mdr_contract_variance:INV-MER003-2026-10"
+    }
+  },
+  {
+    "exception_id": "config:config_unapproved:CFG-003",
+    "review_status": "pending",
+    "action_json": {
+      "source": "deterministic",
+      "timing": {
+        "ai_ms": 0,
+        "neon_ms": 182,
+        "retries": 0,
+        "total_ms": 182
+      },
+      "actions": [
+        {
+          "type": "escalate",
+          "action": "escalate",
+          "amount": 2028.36,
+          "currency": "INR",
+          "rationale": "Deterministic proposal for CFG-003: the action agent could not finish (requested). Escalate for human review of \u20b92,028.36.",
+          "confidence": 40
+        }
+      ],
+      "faithfulness": 1,
+      "verification": "grounded"
+    },
+    "sql": {
+      "exception_id": "config:config_unapproved:CFG-003",
+      "area": "config",
+      "category": "config_unapproved",
+      "ref_id": "CFG-003",
+      "merchant_id": "MER006",
+      "expected_amount": "0.00",
+      "actual_amount": "2028.36",
+      "leakage": "2028.36",
+      "status": "unmatched"
+    },
+    "live_detail_exception": {
+      "area": "config",
+      "category": "config_unapproved",
+      "ref_id": "CFG-003",
+      "merchant_id": "MER006",
+      "ts": "2026-10-20T09:40:00",
+      "expected_amount": "0.00",
+      "actual_amount": "2028.36",
+      "leakage": "2028.36",
+      "scheme": null,
+      "method": "fx_markup_cap_bps",
+      "status": "unmatched",
+      "exception_id": "config:config_unapproved:CFG-003"
+    }
+  },
+  {
+    "exception_id": "interfaces:interface_duplicates:2026-10-14:gateway",
+    "review_status": "pending",
+    "action_json": {
+      "actions": [
+        {
+          "type": "mark_known",
+          "amount": 0,
+          "target": "interfaces:interface_duplicates:2026-10-14:gateway",
+          "currency": "INR",
+          "rationale": "duplicate interfaces identified",
+          "confidence": 80
+        }
+      ],
+      "faithfulness": 1,
+      "verification": "grounded"
+    },
+    "sql": {
+      "exception_id": "interfaces:interface_duplicates:2026-10-14:gateway",
+      "area": "interfaces",
+      "category": "interface_duplicates",
+      "ref_id": "2026-10-14:gateway",
+      "merchant_id": null,
+      "expected_amount": "199703.00",
+      "actual_amount": "199703.00",
+      "leakage": "0.00",
+      "status": "unmatched"
+    },
+    "live_detail_exception": {
+      "area": "interfaces",
+      "category": "interface_duplicates",
+      "ref_id": "2026-10-14:gateway",
+      "merchant_id": null,
+      "ts": "2026-10-14",
+      "expected_amount": "199703.00",
+      "actual_amount": "199703.00",
+      "leakage": "0.00",
+      "scheme": null,
+      "method": "gateway",
+      "status": "unmatched",
+      "exception_id": "interfaces:interface_duplicates:2026-10-14:gateway"
+    }
+  },
+  {
+    "exception_id": "invoicing:billed_not_invoiced:MER005",
+    "review_status": "pending",
+    "action_json": {
+      "actions": [
+        {
+          "type": "recover",
+          "amount": 14784.5,
+          "target": "MER005",
+          "currency": "INR",
+          "rationale": "Missing Invoice",
+          "confidence": 90
+        }
+      ]
+    },
+    "sql": {
+      "exception_id": "invoicing:billed_not_invoiced:MER005",
+      "area": "invoicing",
+      "category": "billed_not_invoiced",
+      "ref_id": "MER005",
+      "merchant_id": "MER005",
+      "expected_amount": "14784.50",
+      "actual_amount": "0.00",
+      "leakage": "14784.50",
+      "status": "unmatched"
+    },
+    "live_detail_exception": {
+      "area": "invoicing",
+      "category": "billed_not_invoiced",
+      "ref_id": "MER005",
+      "merchant_id": "MER005",
+      "ts": "2026-10-31",
+      "expected_amount": "14784.50",
+      "actual_amount": "0.00",
+      "leakage": "14784.50",
+      "scheme": null,
+      "method": null,
+      "status": "unmatched",
+      "exception_id": "invoicing:billed_not_invoiced:MER005"
+    }
+  },
+  {
+    "exception_id": "payouts:under_payout:PAY-MER002-2026-10",
+    "review_status": "pending",
+    "action_json": {
+      "source": "deterministic",
+      "timing": {
+        "ai_ms": 0,
+        "neon_ms": 187,
+        "retries": 0,
+        "total_ms": 187
+      },
+      "actions": [
+        {
+          "type": "escalate",
+          "action": "escalate",
+          "amount": 19421.1,
+          "currency": "INR",
+          "rationale": "Deterministic proposal for PAY-MER002-2026-10: the action agent could not finish (requested). Escalate for human review of \u20b919,421.10.",
+          "confidence": 40
+        }
+      ],
+      "faithfulness": 1,
+      "verification": "grounded"
+    },
+    "sql": {
+      "exception_id": "payouts:under_payout:PAY-MER002-2026-10",
+      "area": "payouts",
+      "category": "under_payout",
+      "ref_id": "PAY-MER002-2026-10",
+      "merchant_id": "MER002",
+      "expected_amount": "647368.44",
+      "actual_amount": "627947.34",
+      "leakage": "19421.10",
+      "status": "variance"
+    },
+    "live_detail_exception": {
+      "area": "payouts",
+      "category": "under_payout",
+      "ref_id": "PAY-MER002-2026-10",
+      "merchant_id": "MER002",
+      "ts": "2026-10-31",
+      "expected_amount": "647368.44",
+      "actual_amount": "627947.34",
+      "leakage": "19421.10",
+      "scheme": null,
+      "method": null,
+      "status": "variance",
+      "exception_id": "payouts:under_payout:PAY-MER002-2026-10"
+    }
+  },
+  {
+    "exception_id": "scheme:missing_scheme_settlement:CAP00216",
+    "review_status": "pending",
+    "action_json": {
+      "timing": {
+        "ai_ms": 4791,
+        "neon_ms": 252,
+        "retries": 0,
+        "total_ms": 5043
+      },
+      "actions": [
+        {
+          "type": "dispute",
+          "amount": 14825.1,
+          "target": "MER004",
+          "currency": "INR",
+          "rationale": "missing scheme settlement",
+          "confidence": 80
+        }
+      ],
+      "faithfulness": 1,
+      "verification": "grounded"
+    },
+    "sql": {
+      "exception_id": "scheme:missing_scheme_settlement:CAP00216",
+      "area": "scheme",
+      "category": "missing_scheme_settlement",
+      "ref_id": "CAP00216",
+      "merchant_id": "MER004",
+      "expected_amount": "14825.10",
+      "actual_amount": "0.00",
+      "leakage": "14825.10",
+      "status": "unmatched"
+    },
+    "live_detail_exception": {
+      "area": "scheme",
+      "category": "missing_scheme_settlement",
+      "ref_id": "CAP00216",
+      "merchant_id": "MER004",
+      "ts": "2026-10-06 21:03:10",
+      "expected_amount": "14825.10",
+      "actual_amount": "0.00",
+      "leakage": "14825.10",
+      "scheme": "VISA",
+      "method": "card",
+      "status": "unmatched",
+      "exception_id": "scheme:missing_scheme_settlement:CAP00216"
+    }
+  },
+  {
+    "exception_id": "tax:tax_gst_wrong_rate:INV-MER004-2026-10",
+    "review_status": "pending",
+    "action_json": {
+      "actions": [
+        {
+          "type": "recover",
+          "amount": 840.7,
+          "target": "MER004",
+          "currency": "INR",
+          "rationale": "wrong_tax_rate",
+          "confidence": 90
+        }
+      ]
+    },
+    "sql": {
+      "exception_id": "tax:tax_gst_wrong_rate:INV-MER004-2026-10",
+      "area": "tax",
+      "category": "tax_gst_wrong_rate",
+      "ref_id": "INV-MER004-2026-10",
+      "merchant_id": "MER004",
+      "expected_amount": "2522.12",
+      "actual_amount": "1681.42",
+      "leakage": "840.70",
+      "status": "variance"
+    },
+    "live_detail_exception": {
+      "area": "invoicing",
+      "category": "gst_mismatch",
+      "ref_id": "INV-MER004-2026-10",
+      "merchant_id": "MER004",
+      "ts": "2026-10-31",
+      "expected_amount": "2522.12",
+      "actual_amount": "1681.42",
+      "leakage": "840.70",
+      "scheme": null,
+      "method": null,
+      "status": "variance",
+      "exception_id": "invoicing:gst_mismatch:INV-MER004-2026-10"
+    }
+  },
+  {
+    "exception_id": "tax:tax_zero_mdr_illustrative:TAX-ZEROMDR-MER001",
+    "review_status": "pending",
+    "action_json": {
+      "actions": [
+        {
+          "type": "recover",
+          "amount": 752.61,
+          "target": "MER001",
+          "currency": "INR",
+          "rationale": "Incorrect Tax Exemption",
+          "confidence": 80
+        }
+      ],
+      "faithfulness": 1,
+      "verification": "grounded"
+    },
+    "sql": {
+      "exception_id": "tax:tax_zero_mdr_illustrative:TAX-ZEROMDR-MER001",
+      "area": "tax",
+      "category": "tax_zero_mdr_illustrative",
+      "ref_id": "TAX-ZEROMDR-MER001",
+      "merchant_id": "MER001",
+      "expected_amount": "0.00",
+      "actual_amount": "752.61",
+      "leakage": "752.61",
+      "status": "unmatched"
+    },
+    "live_detail_exception": {
+      "area": "tax",
+      "category": "tax_zero_mdr_illustrative",
+      "ref_id": "TAX-ZEROMDR-MER001",
+      "merchant_id": "MER001",
+      "ts": "2026-10-31",
+      "expected_amount": "0.00",
+      "actual_amount": "752.61",
+      "leakage": "752.61",
+      "scheme": "UPI",
+      "method": "upi",
+      "status": "unmatched",
+      "exception_id": "tax:tax_zero_mdr_illustrative:TAX-ZEROMDR-MER001"
+    }
+  },
+  {
+    "exception_id": "terminal:active_terminal_unbilled:POS0013",
+    "review_status": "pending",
+    "action_json": {
+      "timing": {
+        "ai_ms": 2018,
+        "neon_ms": 8,
+        "retries": 0,
+        "total_ms": 2026
+      },
+      "actions": [
+        {
+          "type": "recover",
+          "amount": 1200,
+          "target": "MER004",
+          "currency": "INR",
+          "rationale": "unbilled terminal",
+          "confidence": 80
+        }
+      ],
+      "faithfulness": 1,
+      "verification": "grounded"
+    },
+    "sql": {
+      "exception_id": "terminal:active_terminal_unbilled:POS0013",
+      "area": "terminal",
+      "category": "active_terminal_unbilled",
+      "ref_id": "POS0013",
+      "merchant_id": "MER004",
+      "expected_amount": "1200.00",
+      "actual_amount": "0.00",
+      "leakage": "1200.00",
+      "status": "unmatched"
+    },
+    "live_detail_exception": {
+      "area": "terminal",
+      "category": "active_terminal_unbilled",
+      "ref_id": "POS0013",
+      "merchant_id": "MER004",
+      "ts": "2026-10",
+      "expected_amount": "1200.00",
+      "actual_amount": "0.00",
+      "leakage": "1200.00",
+      "scheme": null,
+      "method": "pos",
+      "status": "unmatched",
+      "exception_id": "terminal:active_terminal_unbilled:POS0013"
+    }
+  },
+  {
+    "exception_id": "apm:apm_report_mismatch:APM0008",
+    "review_status": "approved",
+    "action_json": {
+      "actions": [
+        {
+          "type": "dispute",
+          "amount": 14135.2,
+          "target": "MER-MER005",
+          "currency": "INR",
+          "rationale": "mismatched merchant account",
+          "confidence": 80
+        }
+      ],
+      "faithfulness": 1,
+      "verification": "grounded"
+    },
+    "sql": {
+      "exception_id": "apm:apm_report_mismatch:APM0008",
+      "area": "apm",
+      "category": "apm_report_mismatch",
+      "ref_id": "APM0008",
+      "merchant_id": null,
+      "expected_amount": "14135.20",
+      "actual_amount": "0.00",
+      "leakage": "14135.20",
+      "status": "variance"
+    },
+    "live_detail_exception": {
+      "area": "apm",
+      "category": "apm_report_mismatch",
+      "ref_id": "APM0008",
+      "merchant_id": null,
+      "ts": "2026-10-04",
+      "expected_amount": "14135.20",
+      "actual_amount": "0.00",
+      "leakage": "14135.20",
+      "scheme": "LazyPay",
+      "method": "bnpl",
+      "status": "variance",
+      "exception_id": "apm:apm_report_mismatch:APM0008"
+    }
+  }
+]
