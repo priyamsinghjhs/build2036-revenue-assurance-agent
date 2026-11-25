@@ -82,5 +82,6 @@ export const TITLES: Record<string, string> = {
   "/ingestion": "File ingestion",
   "/review": "Review queue",
   "/models": "Model intelligence",
+  "/open-data": "Open data sources",
   "/false-declines": "False declines",
 };

@@ -33,6 +33,7 @@ import {
   BadgePercent,
   SlidersHorizontal,
   BrainCircuit,
+  Database,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import ExecutivePage from "@/pages/ExecutivePage";
@@ -54,6 +55,7 @@ import IngestionPage from "@/pages/IngestionPage";
 import ReviewQueuePage from "@/pages/ReviewQueuePage";
 import ReviewPage from "@/pages/ReviewPage";
 import ModelsPage from "@/pages/ModelsPage";
+import OpenDataPage from "@/pages/OpenDataPage";
 import { FilterProvider, useFilters } from "@/filters";
 import { Select } from "@/components/ui/select";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -102,6 +104,7 @@ const GROUPS = [
     label: "Intelligence",
     items: [
       { to: "/models", label: "Model intelligence", icon: BrainCircuit },
+      { to: "/open-data", label: "Open data sources", icon: Database },
       { to: "/contracts", label: "Contracts & rules", icon: BookOpen },
       { to: "/anomalies", label: "Anomalies", icon: ShieldAlert },
       { to: "/routing", label: "Routing optimisation", icon: Waypoints },
@@ -306,6 +309,7 @@ function Shell() {
             <Route path="/anomalies" element={<AnomaliesPage />} />
             <Route path="/routing" element={<RoutingPage />} />
             <Route path="/models" element={<ModelsPage />} />
+            <Route path="/open-data" element={<OpenDataPage />} />
             <Route path="/ask" element={<AskPage />} />
             <Route path="/cases" element={<CasesPage />} />
             <Route path="/risks" element={<RisksPage />} />
