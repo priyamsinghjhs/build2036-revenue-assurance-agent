@@ -10,7 +10,7 @@ UPDATE ra_learning_policy
 
 -- Single source of truth for the book open-exception count: COUNT of book
 -- exception rows, excluding exposure areas (AML, KYC, network risk, success,
--- interfaces, anomalies, files). Never SUM(area_summary), which can double-count.
+-- interfaces, files). Anomalies stay in this count so it remains the established book figure. Never SUM(area_summary), which can double-count.
 CREATE OR REPLACE FUNCTION public.ra_book_exception_count()
 RETURNS integer
 LANGUAGE sql
@@ -18,7 +18,7 @@ STABLE
 AS $$
   SELECT COUNT(*)::int
   FROM ra_exception_rows
-  WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files');
+  WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','files');
 $$;
 
 CREATE OR REPLACE FUNCTION public.refresh_ra_summaries()

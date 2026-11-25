@@ -202,7 +202,7 @@ async function sectionKpiReconcile(sql) {
   const topHasExposure = liveTop.some((a) => EXPOSURE.includes(a));
   // After the chart fix + deploy, live top drivers must be book leakage only.
   const liveOk = live.ok && typeof liveLeak === "number" && !topHasExposure && Array.isArray(live.body?.compliance_exposure);
-  const bookCountRows = await sql.query(`SELECT COUNT(*)::int AS n FROM ra_exception_rows WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','anomalies','files')`);
+  const bookCountRows = await sql.query(`SELECT COUNT(*)::int AS n FROM ra_exception_rows WHERE area NOT IN ('aml','network_risk','kyc','success','interfaces','files')`);
   const bookCount = Number(bookCountRows[0]?.n ?? 0);
   const countOk = Number(kpi.exception_count) === bookCount;
   if (!countOk) {
