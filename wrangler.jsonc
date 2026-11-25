@@ -14,6 +14,13 @@
     "CLOUDFLARE_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
     "CF_ACCOUNT_ID": "95f96d50618b771a8c58542029828a1a"
   },
+  "previews": {
+    "vars": {
+      "LLM_PROVIDER": "cloudflare",
+      "CLOUDFLARE_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
+      "CF_ACCOUNT_ID": "95f96d50618b771a8c58542029828a1a"
+    }
+  },
   "containers": [
     {
       "class_name": "RevenueAssuranceContainer",
