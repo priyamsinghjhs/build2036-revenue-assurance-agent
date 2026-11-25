@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "npm ci --prefix cloudflare && npm run build --prefix cloudflare",
     "deploy": "wrangler deploy",
+    "test": "npm test --prefix cloudflare",
     "types": "wrangler types"
   },
   "devDependencies": {

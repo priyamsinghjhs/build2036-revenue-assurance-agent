@@ -668,7 +668,7 @@ export type IngestionPayload = {
 
 
 export type EvalQuality = {
-  agents: { agent_id: string; n: number; faithfulness: number; hallucination_rate: number; retries: number; unverified: number }[];
+  agents: { agent_id: string; n: number; faithfulness: number; hallucination_rate: number; retries: number; unverified: number; p50_latency_ms?: number | null }[];
   totals: { n: number; faithfulness: number; unverified: number; retries: number };
   note: string;
 };

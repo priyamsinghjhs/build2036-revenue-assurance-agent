@@ -142,6 +142,7 @@ app.post("/api/actions/:id/decision", async (c) => {
   return c.json({ ok: true, action_id: c.req.param("id"), status, decided_by: user.id });
 });
 
+
 app.get("/api/dashboard/overview", async (c) => {
   return cachedJson(
     "overview",
@@ -255,6 +256,18 @@ app.post("/api/agents/runs", async (c) => {
   return c.json({ ...run, sequence });
 });
 
+/**
+ * skip_llm is honoured the same way the rate limiter reads it: a request the
+ * limiter does not meter (skip_llm or mode=deterministic) must never call Workers AI.
+ * mode=llm opts recon agents back into model narration.
+ */
+function requestedAgentMode(body: Record<string, unknown>): "llm" | "deterministic" | undefined {
+  const mode = typeof body.mode === "string" ? body.mode : "";
+  if (body.skip_llm === true || body.skip_llm === "1" || mode === "deterministic") return "deterministic";
+  if (mode === "llm") return "llm";
+  return undefined;
+}
+
 app.post("/api/agents/step", async (c) => {
   const body = await readJson(c);
   const runId = requiredString(body, "run_id");
@@ -262,7 +275,7 @@ app.post("/api/agents/step", async (c) => {
   if (!AGENT_ROSTER.some((a) => a.id === agentId)) {
     throw new HTTPException(400, { message: "Unknown agent_id" });
   }
-  const mode = optionalString(body, "mode") === "deterministic" ? "deterministic" as const : undefined;
+  const mode = requestedAgentMode(body);
   const result = await runAgentStep(c.env, {
     runId,
     agentId,
@@ -294,7 +307,7 @@ app.post("/api/agents/investigate", async (c) => {
   await assertRecordVisible(getDb(c.env), requireUser(c), { type: "exception", id: exceptionId, area: areaFromExceptionId(exceptionId) });
   const domain = optionalString(body, "domain") || undefined;
   const runId = optionalString(body, "run_id") || undefined;
-  const mode = optionalString(body, "mode") === "deterministic" ? "deterministic" as const : undefined;
+  const mode = requestedAgentMode(body);
   const accept = c.req.header("accept") || "";
   if (accept.includes("text/event-stream")) {
     return sseResponse(async (send) => {
@@ -339,6 +352,7 @@ app.post("/api/settings/data-sources/:id/sync", async (c) => {
   const result = await syncConnection(getDb(c.env), c.env, c.req.param("id"));
   return c.json(result.body, result.status as 200 | 400 | 404 | 500 | 503);
 });
+
 
 // Legacy settlement + 5-agent endpoints (still used if a settlement is investigated)
 app.get("/api/settlements", async (c) => {
@@ -457,6 +471,7 @@ app.get("/api/network-risk/export", async (c) => {
   });
 });
 
+
 app.get("/api/intel", async (c) => c.json(await intelOverview(getDb(c.env))));
 app.get("/api/eval/quality", async (c) => c.json(await evalQuality(getDb(c.env))));
 app.get("/api/contracts", async (c) => {
@@ -495,69 +510,225 @@ app.get("/api/anomalies", async (c) => {
   return c.json(await listAnomalies(getDb(c.env)));
 });
 app.post("/api/anomalies/investigate", async (c) => {
-  const body = await readJson(c);
-  return c.json(await investigateAnomaly(c.env, requiredString(body, "event_id")));
+  await assertAreaVisible(requireUser(c), "anomalies");
+  const body = await readJson(c).catch(() => ({} as Record<string, unknown>));
+  return c.json(await investigateAnomaly(c.env, body.event_id ? String(body.event_id) : undefined));
 });
 app.get("/api/routing", async (c) => c.json(await routingSummary(getDb(c.env))));
-app.post("/api/routing/sim", async (c) => c.json(await runRoutingSim(c.env)));
-app.get("/api/ask/templates", (c) => c.json({ views: ASK_VIEWS, suggested: SUGGESTED_QUESTIONS }));
-app.post("/api/ask", async (c) => {
-  const body = await readJson(c);
-  return c.json(await askData(c.env, requiredString(body, "question")));
-});
-app.get("/api/models", async (c) => c.json(await modelsOverview(getDb(c.env))));
+app.post("/api/routing/simulate", async (c) => c.json(await runRoutingSim(getDb(c.env))));
+app.get("/api/models", async (c) =>
+  cachedJson("models-overview", () => modelsOverview(getDb(c.env)), 120_000, (p) => c.executionCtx.waitUntil(p)),
+);
 app.get("/api/models/:id", async (c) => {
-  const m = await modelDetail(getDb(c.env), c.req.param("id"));
-  if (!m) return c.json({ error: "Model not found" }, 404);
-  return c.json(m);
+  const detail = await modelDetail(getDb(c.env), c.req.param("id"));
+  if (!detail) throw new HTTPException(404, { message: "Unknown model" });
+  return c.json(detail);
 });
-app.post("/api/models/:id/predict", async (c) => {
-  const body = await readJson(c);
-  return c.json(await predictFeatures(c.env, c.req.param("id"), body));
+app.post("/api/models/predict", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { model_id?: string; features?: Record<string, number> };
+  const modelId = String(body.model_id || "");
+  if (!getModel(modelId)) throw new HTTPException(400, { message: "Unknown or unbundled model_id" });
+  const ev = predictFeatures(modelId, body.features || {});
+  return c.json({ synthetic: true, ...ev });
 });
-app.get("/api/cases", async (c) => c.json(await listCases(getDb(c.env))));
+app.get("/api/cases", async (c) => {
+  const user = requireUser(c);
+  const db = getDb(c.env);
+  const rows = await listCases(db);
+  const assigned = await loadAssignedIds(db, user.id, ["exception", "case"]);
+  const list = Array.isArray(rows) ? rows : (rows as { cases?: Record<string, unknown>[] }).cases ?? [];
+  const filtered = filterRowsByScope(
+    user,
+    list as Record<string, unknown>[],
+    (r) => areaFromExceptionId(String(r.exception_id || r.area || "")),
+    assigned,
+    (r) => String(r.case_id || r.exception_id || ""),
+  );
+  return Array.isArray(rows) ? c.json(filtered) : c.json({ ...(rows as object), cases: filtered });
+});
 app.get("/api/cases/:id", async (c) => {
+  const user = requireUser(c);
   const row = await getCase(getDb(c.env), c.req.param("id"));
   if (!row) return c.json({ error: "Case not found" }, 404);
+  const exIds = ((row as { exceptions?: string[] }).exceptions ?? []) as string[];
+  let ok = false;
+  for (const ex of exIds.length ? exIds : [c.req.param("id")]) {
+    try {
+      await assertRecordVisible(getDb(c.env), user, { type: "case", id: ex, area: areaFromExceptionId(ex) });
+      ok = true;
+      break;
+    } catch {
+      /* try next linked exception */
+    }
+  }
+  if (!ok) throw new AppError("Not found", 404);
   return c.json(row);
 });
 app.post("/api/cases/:id", async (c) => {
+  const user = requireUser(c);
+  const existing = await getCase(getDb(c.env), c.req.param("id"));
+  if (!existing) return c.json({ error: "Case not found" }, 404);
+  const exIds = ((existing as { exceptions?: string[] }).exceptions ?? []) as string[];
+  let ok = false;
+  for (const ex of exIds.length ? exIds : [c.req.param("id")]) {
+    try {
+      await assertRecordVisible(getDb(c.env), user, { type: "case", id: ex, area: areaFromExceptionId(ex) });
+      ok = true;
+      break;
+    } catch { /* next */ }
+  }
+  if (!ok) throw new AppError("Not found", 404);
   const body = await readJson(c);
-  return c.json(await updateCase(getDb(c.env), c.req.param("id"), body, requireUser(c).id));
+  return c.json(await updateCase(getDb(c.env), c.req.param("id"), {
+    status: body.status ? String(body.status) : undefined,
+    owner: body.owner ? String(body.owner) : undefined,
+    comment: body.comment ? String(body.comment) : undefined,
+    actor: requireUser(c).id,
+  }));
 });
-app.get("/api/risks", async (c) => c.json(await listRisks(getDb(c.env))));
-app.get("/api/files", async (c) => c.json(await listFiles(getDb(c.env))));
-app.get("/api/reviews", async (c) => c.json(await listReviews(getDb(c.env))));
+app.get("/api/audit/suggestions", async (c) => {
+  const ex = String(c.req.query("exception_id") || "");
+  if (!ex) return c.json({ error: "exception_id is required" }, 400);
+  await assertRecordVisible(getDb(c.env), requireUser(c), { type: "exception", id: ex, area: areaFromExceptionId(ex) });
+  return c.json({ decisions: await listSuggestionDecisions(getDb(c.env), ex) });
+});
+app.post("/api/audit/suggestions", async (c) => {
+  const body = await readJson(c);
+  const decision = String(body.decision || "");
+  if (decision !== "accepted" && decision !== "dismissed") {
+    return c.json({ error: "decision must be accepted or dismissed" }, 400);
+  }
+  const suggestion = (body.suggestion || {}) as AuditSuggestion;
+  if (!body.exception_id || !suggestion.suggestion_id) {
+    return c.json({ error: "exception_id and suggestion.suggestion_id are required" }, 400);
+  }
+  const exId = String(body.exception_id);
+  await assertRecordVisible(getDb(c.env), requireUser(c), { type: "exception", id: exId, area: areaFromExceptionId(exId) });
+  try {
+    const result = await decideAuditorSuggestion(getDb(c.env), {
+      exception_id: String(body.exception_id),
+      suggestion,
+      decision,
+      comment: body.comment ? String(body.comment) : undefined,
+      reviewer: requireUser(c).id,
+      run_id: body.run_id ? String(body.run_id) : undefined,
+    });
+    return c.json(result);
+  } catch (err) {
+    return c.json({ error: publicErrorMessage(err, "Could not record the suggestion decision.") }, 400);
+  }
+});
+app.get("/api/reviews", async (c) => {
+  const user = requireUser(c);
+  const db = getDb(c.env);
+  const data = await listReviews(db);
+  const assigned = await loadAssignedIds(db, user.id, ["exception", "review"]);
+  const areaOf = (r: Record<string, unknown>) => areaFromExceptionId(String(r.exception_id || ""));
+  const idOf = (r: Record<string, unknown>) => String(r.exception_id || "");
+  const pending = filterRowsByScope(user, data.pending as Record<string, unknown>[], areaOf, assigned, idOf);
+  const decided = filterRowsByScope(user, data.decided as Record<string, unknown>[], areaOf, assigned, idOf);
+  return c.json({ pending, decided, count: pending.length });
+});
 app.get("/api/reviews/:id", async (c) => {
+  const user = requireUser(c);
   const row = await getReview(getDb(c.env), c.req.param("id"));
-  if (!row) return c.json({ error: "Review not found" }, 404);
+  if (!row) return c.json({ error: "Review item not found" }, 404);
+  const exId = String((row.review as { exception_id?: string } | undefined)?.exception_id || c.req.param("id"));
+  await assertRecordVisible(getDb(c.env), user, { type: "review", id: exId, area: areaFromExceptionId(exId) });
   return c.json(row);
 });
-app.post("/api/reviews/:id", async (c) => {
+app.post("/api/reviews/:id/decision", async (c) => {
   const body = await readJson(c);
-  return c.json(await submitReview(getDb(c.env), c.req.param("id"), body, requireUser(c).id));
+  const decision = String(body.decision || "");
+  if (decision !== "approved" && decision !== "rejected" && decision !== "reinvestigate") {
+    return c.json({ error: "decision must be approved, rejected or reinvestigate" }, 400);
+  }
+  const user = requireUser(c);
+  const current = await getReview(getDb(c.env), c.req.param("id"));
+  if (!current) return c.json({ error: "Review item not found" }, 404);
+  const exId = String((current.review as { exception_id?: string } | undefined)?.exception_id || c.req.param("id"));
+  await assertRecordVisible(getDb(c.env), user, { type: "review", id: exId, area: areaFromExceptionId(exId) });
+  return c.json(await submitReview(c.env, c.req.param("id"), {
+    decision,
+    comment: String(body.comment || ""),
+    amount_override: body.amount_override == null ? undefined : Number(body.amount_override),
+    reviewer: requireUser(c).id,
+  }));
 });
-app.get("/api/drafts", async (c) => c.json(await listDrafts(getDb(c.env))));
+app.get("/api/ask/schema", (c) => c.json({ views: [...ASK_VIEWS], suggested: SUGGESTED_QUESTIONS }));
+app.post("/api/ask", async (c) => {
+  const body = await readJson(c);
+  const q = String(body.question || "").trim();
+  if (!q) return c.json({ error: "question is required" }, 400);
+  return c.json(await askData(c.env, q));
+});
+app.get("/api/explain", async (c) => {
+  const type = c.req.query("type") || "control";
+  const id = c.req.query("id") || "";
+  if (!id) return c.json({ error: "id is required" }, 400);
+  return c.json(await getExplanation(c.env, type, id, c.req.query("refresh") === "1"));
+});
+app.post("/api/rules/simulate", async (c) => {
+  const body = await readJson(c);
+  return c.json(await simulateRule(getDb(c.env), {
+    metric: body.metric ? String(body.metric) : undefined,
+    z: body.z == null ? undefined : Number(body.z),
+    control_id: body.control_id ? String(body.control_id) : undefined,
+    match_rate: body.match_rate == null ? undefined : Number(body.match_rate),
+  }));
+});
+app.get("/api/drafts", async (c) => {
+  const user = requireUser(c);
+  const db = getDb(c.env);
+  const rows = await listDrafts(db);
+  const assigned = await loadAssignedIds(db, user.id, ["exception", "draft"]);
+  const list = Array.isArray(rows) ? rows : (rows as { drafts?: Record<string, unknown>[] }).drafts ?? [];
+  const filtered = filterRowsByScope(
+    user,
+    list as Record<string, unknown>[],
+    (r) => areaFromExceptionId(String(r.exception_id || "")),
+    assigned,
+    (r) => String(r.draft_id || r.exception_id || ""),
+  );
+  return Array.isArray(rows) ? c.json(filtered) : c.json({ ...(rows as object), drafts: filtered });
+});
 app.post("/api/drafts/:id/decision", async (c) => {
   const body = await readJson(c);
-  return c.json(await decideDraft(getDb(c.env), c.req.param("id"), body, requireUser(c).id));
+  const status = body.status === "rejected" ? "rejected" : "approved";
+  const user = requireUser(c);
+  await assertRecordVisible(getDb(c.env), user, { type: "draft", id: c.req.param("id") });
+  return c.json({ draft: await decideDraft(getDb(c.env), c.req.param("id"), status, user.id) });
 });
 app.get("/api/drafts/:id/export", async (c) => {
-  const csv = await exportDraft(getDb(c.env), c.req.param("id"));
-  return new Response(csv, { headers: { "content-type": "text/csv" } });
+  await assertRecordVisible(getDb(c.env), requireUser(c), { type: "draft", id: c.req.param("id") });
+  const row = await exportDraft(getDb(c.env), c.req.param("id"));
+  if (!row) return c.json({ error: "Draft not found" }, 404);
+  return new Response(row.text, {
+    headers: { "content-type": "text/plain; charset=utf-8", "content-disposition": `attachment; filename="${row.filename}"` },
+  });
 });
 app.get("/api/learning", async (c) => c.json(await learningState(getDb(c.env))));
 app.post("/api/learning/apply", async (c) => c.json(await applyLearning(getDb(c.env))));
-app.get("/api/graph-tools", async (c) => {
-  const q = c.req.query("q") || "";
-  return c.json(await graphTools(getDb(c.env), { q }));
+app.get("/api/risks", async (c) => c.json(await listRisks(getDb(c.env))));
+app.get("/api/files", async (c) => {
+  const user = requireUser(c);
+  if (!areaInRoleScope(user.role, "files")) return c.json({ files: [] });
+  return c.json(await listFiles(getDb(c.env)));
 });
-app.get("/api/explanations/:id", async (c) => {
-  const row = await getExplanation(getDb(c.env), c.req.param("id"));
-  if (!row) return c.json({ error: "Explanation not found" }, 404);
-  return c.json(row);
+app.get("/api/graph-query", async (c) => {
+  const exceptionId = c.req.query("exception_id") || undefined;
+  if (exceptionId) {
+    await assertRecordVisible(getDb(c.env), requireUser(c), { type: "exception", id: exceptionId, area: areaFromExceptionId(exceptionId) });
+  }
+  return c.json(await graphTools(getDb(c.env), { merchant_id: c.req.query("merchant_id") || undefined, exception_id: exceptionId }));
 });
-app.get("/api/rule-tests", async (c) => c.json(await ruleTests(getDb(c.env))));
+
+
+
+app.get("/api/contracts/rules/:id/tests", async (c) => {
+  await assertAreaVisible(requireUser(c), "contracts");
+  return c.json(await ruleTests(c.env, c.req.param("id")));
+});
 app.post("/api/contracts/rules/:id/test", async (c) => {
   await assertAreaVisible(requireUser(c), "contracts");
   return c.json(await testRule(c.env, c.req.param("id")));
@@ -618,6 +789,7 @@ function optionalTrail(body: Record<string, unknown>): string[] {
 
 export type { AgentState, Env };
 async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  // Await the work so a CPU/time limit cannot drop the job while the log still says 'running'.
   const work = runDailyAutomation(env, { force: false }).then(() => invalidateMem());
   ctx.waitUntil(work);
   await work;
@@ -635,3 +807,4 @@ export default {
   fetch: handleFetch,
   scheduled,
 };
+

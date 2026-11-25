@@ -152,6 +152,8 @@ async function requestUsesWorkersAi(c: AuthCtx, path: string): Promise<boolean> 
   const body = await peekJson(c);
   const skip = body.skip_llm === true || body.skip_llm === "1" || body.mode === "deterministic";
   if (skip) return false;
+  // Recon agents narrate from a SQL template unless mode=llm, so they spend no neurons.
+  if (path === "/api/agents/step" && String(body.agent_id || "").startsWith("recon_") && body.mode !== "llm") return false;
   if (path === "/api/ask" || path === "/api/ask/") {
     const q = String(body.question || "").trim();
     if (!q || isOutOfScopeQuestion(q)) return false;

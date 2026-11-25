@@ -92,6 +92,9 @@ CREATE OR REPLACE VIEW v_ask_exceptions AS
     (((area || ':'::text) || category) || ':'::text) || ref_id AS exception_id
    FROM ra_exception_rows;
 
+-- Dropping the view removed 006's grant; restore it (see 019).
+GRANT SELECT ON v_ask_exceptions TO ra_readonly;
+
 CREATE OR REPLACE VIEW v_ra_payouts AS
  SELECT p.payout_id AS ref_id,
     'payouts'::text AS area,
