@@ -254,6 +254,18 @@ app.post("/api/agents/runs", async (c) => {
   return c.json({ ...run, sequence });
 });
 
+/**
+ * skip_llm is honoured the same way the rate limiter reads it: a request the
+ * limiter does not meter (skip_llm or mode=deterministic) must never call Workers AI.
+ * mode=llm opts recon agents back into model narration.
+ */
+function requestedAgentMode(body: Record<string, unknown>): "llm" | "deterministic" | undefined {
+  const mode = typeof body.mode === "string" ? body.mode : "";
+  if (body.skip_llm === true || body.skip_llm === "1" || mode === "deterministic") return "deterministic";
+  if (mode === "llm") return "llm";
+  return undefined;
+}
+
 app.post("/api/agents/step", async (c) => {
   const body = await readJson(c);
   const runId = requiredString(body, "run_id");
@@ -261,7 +273,7 @@ app.post("/api/agents/step", async (c) => {
   if (!AGENT_ROSTER.some((a) => a.id === agentId)) {
     throw new HTTPException(400, { message: "Unknown agent_id" });
   }
-  const mode = optionalString(body, "mode") === "deterministic" ? "deterministic" as const : undefined;
+  const mode = requestedAgentMode(body);
   const result = await runAgentStep(c.env, {
     runId,
     agentId,
@@ -293,7 +305,7 @@ app.post("/api/agents/investigate", async (c) => {
   await assertRecordVisible(getDb(c.env), requireUser(c), { type: "exception", id: exceptionId, area: areaFromExceptionId(exceptionId) });
   const domain = optionalString(body, "domain") || undefined;
   const runId = optionalString(body, "run_id") || undefined;
-  const mode = optionalString(body, "mode") === "deterministic" ? "deterministic" as const : undefined;
+  const mode = requestedAgentMode(body);
   const accept = c.req.header("accept") || "";
   if (accept.includes("text/event-stream")) {
     return sseResponse(async (send) => {

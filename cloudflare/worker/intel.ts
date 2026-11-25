@@ -20,7 +20,7 @@ import {
 export async function evalQuality(db: AppDb) {
   try {
     const { results } = await db
-      .prepare("SELECT agent_id, n, faithfulness, hallucination_rate, retries, unverified FROM v_ra_eval_quality ORDER BY unverified DESC, agent_id")
+      .prepare("SELECT * FROM v_ra_eval_quality ORDER BY unverified DESC, agent_id")
       .all<Record<string, unknown>>();
     const totals = await db
       .prepare(

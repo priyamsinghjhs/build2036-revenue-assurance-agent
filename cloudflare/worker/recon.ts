@@ -387,9 +387,43 @@ export async function systemMap(db: AppDb): Promise<{ nodes: MapNode[]; edges: M
     })),
   };
 }
+const AGENT_SUMMARY_TTL_MS = 60_000;
+const agentSummaryCache = new Map<string, { at: number; value: Awaited<ReturnType<typeof loadDomainSummaryForAgent>> }>();
+
+/**
+ * SQL evidence pack for one recon agent. The three reads run in parallel and the
+ * pack is cached in the isolate for 60s (the book only changes on ingest).
+ * top_exceptions are the largest by leakage; rows_count / rows_leakage are the
+ * exception-row totals, so the narrative can cross-check them against the summary.
+ */
 export async function domainSummaryForAgent(db: AppDb, area: AreaId) {
-  const summary = await summarizeArea(db, area);
-  const top = await listExceptions(db, area, 8);
+  const hit = agentSummaryCache.get(area);
+  if (hit && Date.now() - hit.at < AGENT_SUMMARY_TTL_MS) return hit.value;
+  const value = await loadDomainSummaryForAgent(db, area);
+  agentSummaryCache.set(area, { at: Date.now(), value });
+  return value;
+}
+
+export function clearAgentSummaryCache() {
+  agentSummaryCache.clear();
+}
+
+async function loadDomainSummaryForAgent(db: AppDb, area: AreaId) {
+  const [summary, topRes, agg] = await Promise.all([
+    summarizeArea(db, area),
+    db
+      .prepare("SELECT * FROM ra_exception_rows WHERE area = ? ORDER BY leakage DESC LIMIT 8")
+      .bind(area)
+      .all<Record<string, unknown>>(),
+    db
+      .prepare(
+        "SELECT COUNT(*)::int AS n, COALESCE(ROUND(SUM(leakage)::numeric, 2), 0) AS leakage FROM ra_exception_rows WHERE area = ?",
+      )
+      .bind(area)
+      .first<{ n: number; leakage: number | string }>(),
+  ]);
+  const top = (topRes.results ?? []).map(mapException);
+  const topLeakageSum = Math.round(top.reduce((sum, e) => sum + Number(e.leakage || 0), 0) * 100) / 100;
   return {
     area,
     label: summary.label,
@@ -398,6 +432,11 @@ export async function domainSummaryForAgent(db: AppDb, area: AreaId) {
     unmatched: summary.unmatched,
     variance: summary.variance,
     leakage: summary.leakage,
+    exception_count: summary.exception_count,
+    rows_count: Number(agg?.n ?? 0),
+    rows_leakage: Number(agg?.leakage ?? 0),
+    total_items: summary.matched + summary.unmatched + summary.variance,
+    top_leakage_sum: topLeakageSum,
     top_exceptions: top.map((e) => ({
       exception_id: e.exception_id,
       category: e.category,
@@ -409,6 +448,8 @@ export async function domainSummaryForAgent(db: AppDb, area: AreaId) {
     })),
   };
 }
+
+export type AgentDomainSummary = Awaited<ReturnType<typeof loadDomainSummaryForAgent>>;
 
 export async function policyText(db: AppDb, topic: string): Promise<string> {
   const { results } = await db

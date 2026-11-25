@@ -12,6 +12,24 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { neon } from "@neondatabase/serverless";
 import { checkGrounding } from "../worker/grounding";
+import { domainSummaryForAgent } from "../worker/recon";
+
+/** Minimal AppDb over the Neon HTTP driver, so the rescore rebuilds the exact recon evidence pack the Worker uses. */
+function neonAppDb(run: typeof sql) {
+  return {
+    prepare(q: string) {
+      let args: unknown[] = [];
+      const text = () => { let i = 0; return q.replace(/\?/g, () => `$${++i}`); };
+      const stmt = {
+        bind(...a: unknown[]) { args = a; return stmt; },
+        async all<T>() { return { results: (await run.query(text(), args)) as T[] }; },
+        async first<T>() { const r = (await run.query(text(), args)) as T[]; return r[0] ?? null; },
+        async run() { await run.query(text(), args); return {}; },
+      };
+      return stmt;
+    },
+  };
+}
 
 const LABEL = process.env.RESCORE_LABEL || "ta13-grounding-rescore-2026-11-25";
 const file = process.env.DATABASE_URL_FILE || process.env.REGRESSION_DATABASE_URL_FILE || "";
@@ -110,7 +128,12 @@ async function loadUniverse() {
       void pol;
     } catch { /* no policy table */ }
   }
-  return { byId, byRef, byArea, payouts, areas, kpis: kpis[0], outputsByRun, policy };
+  const packs = new Map<string, unknown>();
+  const db = neonAppDb(sql);
+  for (const a of areas as { area: string }[]) {
+    packs.set(a.area, await domainSummaryForAgent(db as never, a.area as never));
+  }
+  return { byId, byRef, byArea, payouts, areas, kpis: kpis[0], outputsByRun, policy, packs };
 }
 
 function contextFor(
@@ -169,7 +192,12 @@ function contextFor(
       recon_funding: ["funding"],
       recon_settlement: ["settlement"],
     };
-    for (const a of map[row.agent_id] || []) areasToInclude.add(a);
+    for (const a of map[row.agent_id] || []) {
+      areasToInclude.add(a);
+      // The recon agent's runtime INPUT was exactly this SQL pack.
+      const pack = uni.packs.get(a);
+      if (pack) chunks.push(`PACK ${JSON.stringify(pack)}`);
+    }
   }
   if (row.agent_id === "gap_detection" || row.agent_id === "orchestrator") {
     for (const a of uni.byArea.keys()) areasToInclude.add(a);

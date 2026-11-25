@@ -19,6 +19,12 @@ import { normalizeAmount, normalizeConfidence } from "../shared/numbers";
 import { inrExact } from "../shared/money";
 import { checkGrounding, retryPrompt } from "./grounding";
 import { AUDITOR_SCHEMA, alignCfoToVerdict, finalizeAuditorOutput } from "./auditor";
+import { pruneUncitedRecon, reconTemplateOutput, type ReconPack } from "./reconNarrative";
+
+/** Recon agents that restate SQL summaries. They narrate from a SQL template unless mode is "llm". */
+export function isTemplateReconAgent(agentId: string): boolean {
+  return agentId.startsWith("recon_");
+}
 
 const JSON_HINT = "Reply with compact JSON only. No markdown fences, no prose outside JSON.";
 
@@ -90,6 +96,39 @@ export async function getCachedExceptionInput(env: Env, exceptionId: string): Pr
   return { input: payload, cache_hit: false, neon_ms: Date.now() - t0 };
 }
 
+const RECON_AREAS: Record<string, AreaId[]> = {
+  recon_authorization: ["authorization"],
+  recon_scheme: ["scheme"],
+  recon_network_gateway: ["network", "gateway"],
+  recon_partner: ["partner"],
+  recon_terminal: ["terminal"],
+  recon_bank: ["bank_trs"],
+  recon_apm: ["apm"],
+  recon_fx: ["fx"],
+  recon_billing: ["billing"],
+  recon_invoicing: ["invoicing"],
+  recon_cash: ["cash_ar"],
+  recon_vendor: ["vendor"],
+  recon_gl: ["gl"],
+  recon_settlement: ["settlement"],
+  recon_funding: ["funding"],
+  recon_acquirer: ["acquirer"],
+  recon_config: ["config"],
+  recon_tax: ["tax"],
+  recon_kyc: ["kyc"],
+  recon_interfaces: ["interfaces"],
+  recon_aml: ["aml"],
+  recon_network: ["network_risk"],
+  recon_success: ["success"],
+  recon_files: ["files"],
+  recon_false_declines: ["false_declines"],
+  contract_extract: ["contracts"],
+};
+
+export function reconAreasFor(agentId: string, domain?: string): AreaId[] {
+  return RECON_AREAS[agentId] ?? (domain ? [domain as AreaId] : []);
+}
+
 export async function buildInput(env: Env, agentId: AgentId, scope: string, domain?: string, exceptionId?: string) {
   const db = getDb(env);
   if (agentId === "orchestrator") {
@@ -108,35 +147,7 @@ export async function buildInput(env: Env, agentId: AgentId, scope: string, doma
     };
   }
   if (agentId.startsWith("recon_")) {
-    const map: Record<string, AreaId[]> = {
-      recon_authorization: ["authorization"],
-      recon_scheme: ["scheme"],
-      recon_network_gateway: ["network", "gateway"],
-      recon_partner: ["partner"],
-      recon_terminal: ["terminal"],
-      recon_bank: ["bank_trs"],
-      recon_apm: ["apm"],
-      recon_fx: ["fx"],
-      recon_billing: ["billing"],
-      recon_invoicing: ["invoicing"],
-      recon_cash: ["cash_ar"],
-      recon_vendor: ["vendor"],
-      recon_gl: ["gl"],
-      recon_settlement: ["settlement"],
-      recon_funding: ["funding"],
-      recon_acquirer: ["acquirer"],
-      recon_config: ["config"],
-      recon_tax: ["tax"],
-      recon_kyc: ["kyc"],
-      recon_interfaces: ["interfaces"],
-      recon_aml: ["aml"],
-      recon_network: ["network_risk"],
-      recon_success: ["success"],
-      recon_files: ["files"],
-      recon_false_declines: ["false_declines"],
-      contract_extract: ["contracts"],
-    };
-    const areas = map[agentId] ?? (domain ? [domain as AreaId] : []);
+    const areas = reconAreasFor(agentId, domain);
     const topic = areas[0] === "bank_trs" ? "bank_trs" : areas[0] === "gateway" || areas[0] === "network" ? "fees" : areas[0] ?? "synthetic";
     const [summaries, policy] = await Promise.all([
       Promise.all(areas.map((a) => domainSummaryForAgent(db, a))),
@@ -240,6 +251,12 @@ function deterministicStepOutput(
   priors: { agent: string; output: unknown }[],
   reason: string,
 ): Record<string, unknown> {
+  if (isTemplateReconAgent(agentId)) {
+    const rec = (input ?? {}) as { summaries?: ReconPack[] };
+    const out = reconTemplateOutput(agentId.replace(/^recon_/, ""), rec.summaries ?? []);
+    if (reason && reason !== "requested") out.note = `SQL template used because ${reason}.`;
+    return out;
+  }
   const facts = factBag(input);
   const leakage = facts.leakage ?? facts.amount ?? facts.expected_amount;
   const ref = String(facts.recon_ref ?? facts.ref_id ?? facts.exception_id ?? "this exception");
@@ -298,13 +315,86 @@ function deterministicStepOutput(
   };
 }
 
+type StepOpts = { runId: string; agentId: AgentId; scope: string; domain?: string; exceptionId?: string; mode?: "llm" | "deterministic" };
+
+async function insertEvalScore(
+  db: AppDb,
+  row: { runId: string; outputId: string; agentId: string; grounding: ReturnType<typeof checkGrounding>; retries: number; verification: string; created: string; latencyMs: number },
+) {
+  const base = [
+    crypto.randomUUID(), row.runId, row.outputId, row.agentId, row.grounding.faithfulness, row.grounding.claims,
+    row.grounding.supported, row.retries, row.verification, JSON.stringify(row.grounding.unsupported), row.created,
+  ];
+  try {
+    await db
+      .prepare(
+        `INSERT INTO ra_eval_scores (eval_id, run_id, output_id, agent_id, faithfulness, claims, supported, retries, verification, unsupported, created_at, latency_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?)`,
+      )
+      .bind(...base, row.latencyMs)
+      .run();
+  } catch {
+    try {
+      await db
+        .prepare(
+          `INSERT INTO ra_eval_scores (eval_id, run_id, output_id, agent_id, faithfulness, claims, supported, retries, verification, unsupported, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)`,
+        )
+        .bind(...base)
+        .run();
+    } catch {
+      /* table may not exist on a stale schema */
+    }
+  }
+}
+
+/**
+ * Recon step without the LLM: one parallel SQL read (cached 60s), a templated
+ * narrative that cites every figure, the same grounding check, and the two
+ * writes in parallel. No Workers AI neurons are spent.
+ */
+async function runReconTemplateStep(env: Env, opts: StepOpts, started: number) {
+  const db = getDb(env);
+  const areas = reconAreasFor(opts.agentId, opts.domain);
+  const summaries = await Promise.all(areas.map((a) => domainSummaryForAgent(db, a)));
+  const neon_ms = Date.now() - started;
+  const input = { task: "Interpret these SQL reconciliation summaries. Do not recompute totals.", summaries };
+  const context = JSON.stringify(input);
+  let output = sanitizeAgentOutput(reconTemplateOutput(opts.agentId.replace(/^recon_/, ""), summaries as ReconPack[]));
+  const grounding = checkGrounding(output, context);
+  output.verification = grounding.passed ? "grounded" : "grounding_failed";
+  if (!grounding.passed) output.unsupported_claims = grounding.unsupported.map((c) => `${c.kind}:${c.value}`);
+  output.faithfulness = Math.round(grounding.faithfulness * 1000) / 1000;
+  const total_ms = Date.now() - started;
+  output.timing = { total_ms, neon_ms, ai_ms: 0, retries: 0, llm: false };
+  output = output as Record<string, unknown>;
+  const outputId = crypto.randomUUID();
+  const created = new Date().toISOString();
+  await Promise.all([
+    db
+      .prepare("INSERT INTO ra_agent_outputs (output_id, run_id, agent_id, domain, output_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(outputId, opts.runId, opts.agentId, opts.domain ?? null, JSON.stringify(output), created)
+      .run(),
+    insertEvalScore(db, {
+      runId: opts.runId, outputId, agentId: opts.agentId, grounding, retries: 0,
+      verification: String(output.verification), created, latencyMs: total_ms,
+    }),
+  ]);
+  return { output_id: outputId, agent_id: opts.agentId, output, created_at: created };
+}
+
 export async function runAgentStep(
   env: Env,
-  opts: { runId: string; agentId: AgentId; scope: string; domain?: string; exceptionId?: string; mode?: "llm" | "deterministic" },
+  opts: StepOpts,
 ) {
   const neonStarted = Date.now();
-  const input = await buildInput(env, opts.agentId, opts.scope, opts.domain, opts.exceptionId);
-  const priors = await priorOutputs(getDb(env), opts.runId);
+  if (isTemplateReconAgent(opts.agentId) && opts.mode !== "llm") {
+    return runReconTemplateStep(env, opts, neonStarted);
+  }
+  const [input, priors] = await Promise.all([
+    buildInput(env, opts.agentId, opts.scope, opts.domain, opts.exceptionId),
+    priorOutputs(getDb(env), opts.runId),
+  ]);
   const neon_ms = Date.now() - neonStarted;
   const briefPriors = priors.slice(-4).map((p) => ({ agent: p.agent_id, output: p.output }));
   const user = compactContext({ input, prior_agents: briefPriors }, 4000, "INPUT");
@@ -357,6 +447,12 @@ export async function runAgentStep(
         output = sanitizeAgentOutput(output);
         if (opts.agentId === "auditor") {
           output = finalizeAuditorOutput(output, input, briefPriors, checkGrounding(output, user));
+        }
+        if (isTemplateReconAgent(opts.agentId)) {
+          const template = deterministicStepOutput(opts.agentId, input, briefPriors, "requested");
+          const pruned = pruneUncitedRecon(output, user, template);
+          output = pruned.output;
+          if (pruned.removed.length) output.post_check_removed = pruned.removed;
         }
         grounding = checkGrounding(output, user);
         if (grounding.passed) break;
@@ -422,29 +518,16 @@ export async function runAgentStep(
   )
     .bind(outputId, opts.runId, opts.agentId, opts.domain ?? null, JSON.stringify(output), created)
     .run();
-  try {
-    await db
-      .prepare(
-        `INSERT INTO ra_eval_scores (eval_id, run_id, output_id, agent_id, faithfulness, claims, supported, retries, verification, unsupported, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)`,
-      )
-      .bind(
-        crypto.randomUUID(),
-        opts.runId,
-        outputId,
-        opts.agentId,
-        grounding.faithfulness,
-        grounding.claims,
-        grounding.supported,
-        retries,
-        String(output.verification ?? (passed ? (String(output.source || "") === "deterministic" ? "deterministic_replacement" : "grounded") : "grounding_failed")),
-        JSON.stringify(grounding.unsupported),
-        created,
-      )
-      .run();
-  } catch {
-    /* table may not exist on a stale schema */
-  }
+  await insertEvalScore(db, {
+    runId: opts.runId,
+    outputId,
+    agentId: opts.agentId,
+    grounding,
+    retries,
+    verification: String(output.verification ?? (passed ? (String(output.source || "") === "deterministic" ? "deterministic_replacement" : "grounded") : "grounding_failed")),
+    created,
+    latencyMs: Number((output.timing as { total_ms?: number } | undefined)?.total_ms ?? 0),
+  });
   if (!passed && (opts.exceptionId || (opts.scope || "").startsWith("exception:"))) {
     const exceptionId = opts.exceptionId || String(opts.scope).replace(/^exception:/, "");
     if (opts.agentId !== "auditor") {
