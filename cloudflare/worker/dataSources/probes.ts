@@ -428,7 +428,7 @@ async function probeGenericHttp(url: string, get: (n: string) => string, secrets
   }
 }
 
-async function probeSampleFile(connector: ConnectorDef, url: string, get: (n: string) => string, secrets: string[], t0: number): Promise<ProbeResult> {
+async function probeSampleFile(connector: ConnectorDef, url: string, get: (n: string) => string, _secrets: string[], t0: number): Promise<ProbeResult> {
   try {
     const headers = authHeaders(get);
     const res = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(TIMEOUT_MS) });

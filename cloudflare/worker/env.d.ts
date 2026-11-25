@@ -32,14 +32,14 @@ declare const crypto: Crypto;
 declare function atob(data: string): string;
 declare function btoa(data: string): string;
 declare class TextEncoder { encode(input?: string): Uint8Array; }
-declare class TextDecoder { decode(input?: ArrayBuffer | Uint8Array): string; }
+declare class TextDecoder { constructor(label?: string, options?: { fatal?: boolean }); decode(input?: ArrayBuffer | Uint8Array): string; }
 declare class URLSearchParams {
   constructor(init?: Record<string, string> | string);
   set(name: string, value: string): void;
   entries(): IterableIterator<[string, string]>;
 }
 declare class URL {
-  constructor(url: string, base?: string);
+  constructor(url: string, base?: string | URL);
   readonly searchParams: URLSearchParams;
   readonly origin: string;
   readonly pathname: string;
@@ -72,6 +72,7 @@ declare class Response {
   readonly ok: boolean;
   readonly status: number;
   text(): Promise<string>;
+  arrayBuffer(): Promise<ArrayBuffer>;
   clone(): Response;
 }
 

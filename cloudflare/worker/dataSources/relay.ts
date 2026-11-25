@@ -82,7 +82,7 @@ export async function probeHyperdrive(
     const mysql = await import("mysql2/promise");
     const conn = await mysql.createConnection({ uri: binding.connectionString, connectTimeout: TIMEOUT_MS, disableEval: true });
     try {
-      await conn.query("SELECT 1 AS ok");
+      await (conn as unknown as { query: (sql: string) => Promise<unknown> }).query("SELECT 1 AS ok");
       return { ok: true, probe: `Hyperdrive ${name} SELECT 1`, latency_ms: Date.now() - t0, message: `SELECT 1 succeeded through Hyperdrive binding ${name}.` };
     } finally {
       await conn.end().catch(() => undefined);
