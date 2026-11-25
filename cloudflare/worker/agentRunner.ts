@@ -582,12 +582,18 @@ export async function runAgentStep(
   if (opts.agentId === "action") {
     const actions = Array.isArray(output.actions) ? (output.actions as Record<string, unknown>[]) : [];
     for (const act of actions) {
+      // Key the proposal to an exception: the step's own, or a target that is an exception id.
+      const target = typeof act.target === "string" && /^[a-z_]+:[a-z0-9_]+:.+/.test(act.target) ? act.target : null;
+      const exceptionKey = opts.exceptionId ?? target;
+      // A deterministic placeholder with no exception ("escalate this exception", ₹0) is not actionable;
+      // queueing it on every Run-all only filled the Action queue with duplicates.
+      if (!exceptionKey && String(output.source ?? "") === "deterministic") continue;
       // Upsert: one pending proposal per (exception, action) across repeated runs.
       await getDb(env).prepare(UPSERT_PROPOSED_ACTION_SQL)
         .bind(
           crypto.randomUUID(),
           opts.runId,
-          opts.exceptionId ?? null,
+          exceptionKey,
           String(act.type ?? "escalate"),
           normalizeAmount(act.amount),
           String(act.currency ?? "INR"),
