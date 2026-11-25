@@ -9,12 +9,14 @@ import { getDb, type AppDb } from "./pg";
 import { requireUser } from "./auth";
 import type { Env } from "./types";
 import { AGENT_ROSTER, RUN_ALL_SEQUENCE, sequenceForDomain, type AgentId } from "./agentRoster";
-import { completeRun, runAgentStep, startRun } from "./agentRunner";
+import { completeRun, reconAreasFor, runAgentStep, startRun } from "./agentRunner";
+import { primeAgentSummaries, type AreaId } from "./recon";
 import { activeReconConfig } from "./reconConfig";
 import {
+  JOB_AI_TIMEOUT_MS,
   LEASE_SECONDS,
   MAX_STEP_ATTEMPTS,
-  jobFinalStatus,
+  isTemplateRecon,
   jobSequence,
   nextChunk,
   progress,
@@ -57,42 +59,70 @@ async function loadSteps(db: AppDb, jobId: string): Promise<(JobStep & { output_
   }));
 }
 
-/** Process one chunk of a job if its lease is free. Safe to call from anywhere, any number of times. */
+function stepsFromJson(v: unknown): (JobStep & { output_id: string | null; ms: number | null; error: string | null })[] {
+  const arr = (typeof v === "string" ? JSON.parse(v) : v) as Record<string, unknown>[] | null;
+  return (arr ?? []).map((r) => ({
+    seq: Number(r.seq),
+    agent_id: String(r.agent_id),
+    status: String(r.status) as JobStep["status"],
+    attempts: Number(r.attempts ?? 0),
+    output_id: r.output_id == null ? null : String(r.output_id),
+    ms: r.ms == null ? null : Number(r.ms),
+    error: r.error == null ? null : String(r.error),
+  }));
+}
+
+/**
+ * Process one chunk of a job if its lease is free. Safe to call from anywhere, any number of times.
+ * Round-trips: 1 (lease + reclaim + steps) + 1 (mark running) + 1 (prime evidence packs, recon chunks)
+ * + per step (its own writes + 1 status update) + 1 (finalize).
+ */
 export async function processJobChunk(env: Env, jobId: string): Promise<{ processed: number; status: string }> {
   const db = getDb(env);
+  // Lease the job, reclaim steps left 'running' by a dead invocation (retry, or fail after MAX
+  // attempts) and read every step, all in one statement.
   const job = await db
     .prepare(
-      `UPDATE ra_recon_jobs
-       SET status = 'running', started_at = COALESCE(started_at, now()),
-           lease_until = now() + (?::int * interval '1 second'), chunks = chunks + 1
-       WHERE job_id = ? AND status IN ('queued','running') AND (lease_until IS NULL OR lease_until < now())
-       RETURNING *`,
+      `WITH j AS (
+         UPDATE ra_recon_jobs
+         SET status = 'running', started_at = COALESCE(started_at, now()),
+             lease_until = now() + (?::int * interval '1 second'), chunks = chunks + 1
+         WHERE job_id = ? AND status IN ('queued','running') AND (lease_until IS NULL OR lease_until < now())
+         RETURNING *
+       ), r AS (
+         UPDATE ra_recon_job_steps st
+         SET status = CASE WHEN st.attempts >= ?::int THEN 'failed' ELSE 'pending' END,
+             error = CASE WHEN st.attempts >= ?::int THEN 'gave up after repeated interruptions' ELSE st.error END
+         FROM j WHERE st.job_id = j.job_id AND st.status = 'running'
+         RETURNING st.seq, st.status, st.error
+       )
+       SELECT j.*,
+         (SELECT json_agg(json_build_object('seq', st.seq, 'agent_id', st.agent_id, 'status', COALESCE(r.status, st.status),
+                   'attempts', st.attempts, 'output_id', st.output_id, 'ms', st.ms, 'error', COALESCE(r.error, st.error)) ORDER BY st.seq)
+            FROM ra_recon_job_steps st LEFT JOIN r ON r.seq = st.seq
+           WHERE st.job_id = j.job_id) AS steps_json
+       FROM j`,
     )
-    .bind(LEASE_SECONDS, jobId)
-    .first<JobRow>();
+    .bind(LEASE_SECONDS, jobId, MAX_STEP_ATTEMPTS, MAX_STEP_ATTEMPTS)
+    .first<JobRow & { steps_json: unknown }>();
   if (!job) return { processed: 0, status: "leased_or_finished" };
   try {
-    // We hold the lease, so any 'running' step belongs to a dead invocation: retry it, or fail it after MAX attempts.
-    await db
-      .prepare(
-        `UPDATE ra_recon_job_steps
-         SET status = CASE WHEN attempts >= ?::int THEN 'failed' ELSE 'pending' END,
-             error = CASE WHEN attempts >= ?::int THEN 'gave up after repeated interruptions' ELSE error END
-         WHERE job_id = ? AND status = 'running'`,
-      )
-      .bind(MAX_STEP_ATTEMPTS, MAX_STEP_ATTEMPTS, jobId)
-      .run();
-    const steps = await loadSteps(db, jobId);
+    const steps = stepsFromJson(job.steps_json);
     const chunk = nextChunk(steps);
     if (chunk.length) {
       const seqs = chunk.map((s) => s.seq);
-      await db
-        .prepare(
-          `UPDATE ra_recon_job_steps SET status = 'running', attempts = attempts + 1, started_at = now()
-           WHERE job_id = ? AND status = 'pending' AND seq IN (SELECT (jsonb_array_elements_text(?::jsonb))::int)`,
-        )
-        .bind(jobId, JSON.stringify(seqs))
-        .run();
+      const reconAreas = chunk.filter((s) => isTemplateRecon(s.agent_id)).flatMap((s) => reconAreasFor(s.agent_id, job.domain || undefined));
+      await Promise.all([
+        db
+          .prepare(
+            `UPDATE ra_recon_job_steps SET status = 'running', attempts = attempts + 1, started_at = now()
+             WHERE job_id = ? AND status = 'pending' AND seq IN (SELECT (jsonb_array_elements_text(?::jsonb))::int)`,
+          )
+          .bind(jobId, JSON.stringify(seqs))
+          .run(),
+        // One read warms every recon step's evidence pack, so the steps themselves only write.
+        reconAreas.length ? primeAgentSummaries(db, reconAreas as AreaId[]).catch(() => 0) : Promise.resolve(0),
+      ]);
       await Promise.all(
         chunk.map(async (s) => {
           const t0 = Date.now();
@@ -103,6 +133,7 @@ export async function processJobChunk(env: Env, jobId: string): Promise<{ proces
               scope: job.scope,
               domain: job.domain || undefined,
               mode: job.mode === "deterministic" ? "deterministic" : undefined,
+              aiTimeoutMs: JOB_AI_TIMEOUT_MS[s.agent_id],
             });
             await db
               .prepare(
@@ -125,23 +156,32 @@ export async function processJobChunk(env: Env, jobId: string): Promise<{ proces
         }),
       );
     }
-    const after = await loadSteps(db, jobId);
-    const p = progress(after);
-    const final = jobFinalStatus(after);
+    // Finalize in one statement: counts, final status (same rule as jobFinalStatus) and lease release.
+    const fin = await db
+      .prepare(
+        `WITH c AS (
+           SELECT COUNT(*) FILTER (WHERE status = 'done')::int AS d,
+                  COUNT(*) FILTER (WHERE status = 'failed')::int AS f,
+                  COUNT(*) FILTER (WHERE status IN ('pending','running'))::int AS p,
+                  COUNT(*)::int AS t
+           FROM ra_recon_job_steps WHERE job_id = ?
+         )
+         UPDATE ra_recon_jobs j
+         SET done_steps = c.d, failed_steps = c.f,
+             status = CASE WHEN c.p > 0 THEN 'running' WHEN c.d = 0 AND c.t > 0 THEN 'failed' ELSE 'succeeded' END,
+             finished_at = CASE WHEN c.p > 0 THEN NULL ELSE now() END,
+             lease_until = now()
+         FROM c WHERE j.job_id = ?
+         RETURNING j.status`,
+      )
+      .bind(jobId, jobId)
+      .first<{ status: string }>();
+    const final = fin?.status ?? "running";
     if (final !== "running") {
       if (job.run_id) await completeRun(db, job.run_id).catch(() => undefined);
       const { clearAgentSummaryCache } = await import("./recon");
       clearAgentSummaryCache();
     }
-    await db
-      .prepare(
-        `UPDATE ra_recon_jobs SET done_steps = ?::int, failed_steps = ?::int, status = ?,
-           finished_at = CASE WHEN ? = 'running' THEN NULL ELSE now() END,
-           lease_until = now()
-         WHERE job_id = ?`,
-      )
-      .bind(p.done, p.failed, final, final, jobId)
-      .run();
     return { processed: chunk.length, status: final };
   } catch (err) {
     const msg = (err instanceof Error ? err.message : String(err)).slice(0, 300);

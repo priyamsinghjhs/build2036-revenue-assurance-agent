@@ -80,8 +80,13 @@ assert(s0.json.check.potential_equals_book_leakage === true, `potential ${s0.jso
 const list = await call("GET", "/recovery?limit=5", "admin@ra.local");
 assert(list.json.totals.potential === s0.json.potential && list.json.page.total === s0.json.n, "list totals = summary");
 const ops = await call("GET", "/recovery?limit=500", "recon_ops@ra.local");
-const cand = (ops.json.rows as { exception_id: string; state: string; expected_amount: number }[]).find((r) => r.state === "identified" && r.expected_amount > 100 && r.expected_amount < 50000);
-assert(cand, "an identified item in recon_ops scope");
+// The lifecycle needs an item both recon_ops (claim) and treasury (record recoveries) can see.
+const tre = await call("GET", "/recovery?limit=500", "treasury@ra.local");
+const treIds = new Set((tre.json.rows as { exception_id: string }[]).map((r) => r.exception_id));
+const cand = (ops.json.rows as { exception_id: string; state: string; expected_amount: number }[]).find(
+  (r) => r.state === "identified" && r.expected_amount > 100 && r.expected_amount < 50000 && treIds.has(r.exception_id),
+);
+assert(cand, "an identified item in recon_ops and treasury scope");
 const id = cand!.exception_id;
 const it0 = await call("GET", `/recovery/items/${encodeURIComponent(id)}`, "recon_ops@ra.local");
 assert(it0.status === 200, `item ${JSON.stringify(it0.json)}`);

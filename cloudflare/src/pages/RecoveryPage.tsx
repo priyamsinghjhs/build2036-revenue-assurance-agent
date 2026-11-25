@@ -76,7 +76,7 @@ export default function RecoveryPage() {
       </Card>
       <Card>
         <CardContent className="overflow-x-auto pt-4">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm [&_td]:px-3 [&_td:first-child]:pl-0 [&_th]:whitespace-nowrap [&_th]:px-3 [&_th:first-child]:pl-0">
             <thead className="text-left text-[11px] uppercase text-muted">
               <tr><th className="py-2">Exception</th><th>State</th><th className="text-right">Expected</th><th className="text-right">Recovered</th><th className="text-right">Outstanding</th><th>Owner</th><th>Due</th></tr>
             </thead>
@@ -88,8 +88,8 @@ export default function RecoveryPage() {
                   <td className="text-right tabular-nums">{inrExact(r.expected_amount)}</td>
                   <td className="text-right tabular-nums">{inrExact(r.recovered_amount)}</td>
                   <td className="text-right tabular-nums">{inrExact(r.outstanding)}</td>
-                  <td>{r.owner ?? "—"}</td>
-                  <td className={r.overdue ? "text-danger" : ""}>{r.due_date ?? "—"}</td>
+                  <td className="whitespace-nowrap">{r.owner ?? "—"}</td>
+                  <td className={`whitespace-nowrap ${r.overdue ? "text-danger" : ""}`}>{r.due_date ?? "—"}</td>
                 </tr>
               ))}
             </tbody>

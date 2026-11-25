@@ -258,18 +258,29 @@ export type AreaSummary = {
 };
 
 export async function summarizeArea(db: AppDb, area: AreaId): Promise<AreaSummary> {
-  const row = await db
-    .prepare(
-      "SELECT area, label, matched, unmatched, variance, leakage, match_rate, exception_count FROM ra_area_summary WHERE area = ?",
-    )
-    .bind(area)
-    .first<AreaSummary>();
-  const liveOne = await db
-    .prepare(
-      `SELECT COUNT(*)::int AS n, COALESCE(SUM(leakage),0)::float AS leakage FROM ra_exception_rows WHERE area = ?`,
-    )
-    .bind(area)
-    .first<{ n: number; leakage: number }>();
+  const [row, liveOne] = await Promise.all([
+    db
+      .prepare(
+        "SELECT area, label, matched, unmatched, variance, leakage, match_rate, exception_count FROM ra_area_summary WHERE area = ?",
+      )
+      .bind(area)
+      .first<AreaSummary>(),
+    db
+      .prepare(
+        `SELECT COUNT(*)::int AS n, COALESCE(SUM(leakage),0)::float AS leakage FROM ra_exception_rows WHERE area = ?`,
+      )
+      .bind(area)
+      .first<{ n: number; leakage: number }>(),
+  ]);
+  return areaSummaryFromRows(area, row, liveOne);
+}
+
+/** Pure: area summary row + live exception-row aggregate -> overlaid AreaSummary. */
+export function areaSummaryFromRows(
+  area: AreaId,
+  row: AreaSummary | null,
+  liveOne: { n: number; leakage: number } | null,
+): AreaSummary {
   const base: AreaSummary = row
     ? {
         ...row,
@@ -545,21 +556,73 @@ export function clearAgentSummaryCache() {
   agentSummaryCache.clear();
 }
 
+/**
+ * One round-trip for an area's evidence pack: summary row, live exception-row aggregate
+ * (count, float sum and rounded sum) and the top 8 rows. Batched over several areas.
+ */
+const PACK_BATCH_SQL = `SELECT a.area,
+   (SELECT row_to_json(s) FROM (SELECT area, label, matched, unmatched, variance, leakage, match_rate, exception_count
+                                FROM ra_area_summary WHERE area = a.area) s) AS summary,
+   (SELECT json_build_object('n', COUNT(*)::int, 'leakage', COALESCE(SUM(leakage),0)::float,
+                             'leakage_r2', COALESCE(ROUND(SUM(leakage)::numeric, 2), 0))
+      FROM ra_exception_rows WHERE area = a.area) AS agg,
+   (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM ra_exception_rows WHERE area = a.area
+                                                   ORDER BY leakage DESC LIMIT 8) t) AS top
+ FROM jsonb_array_elements_text(?::jsonb) AS a(area)`;
+
+type PackParts = {
+  area: string;
+  summary: AreaSummary | null;
+  agg: { n: number; leakage: number; leakage_r2: number | string } | null;
+  top: Record<string, unknown>[] | null;
+};
+
+async function fetchPackParts(db: AppDb, areas: AreaId[]): Promise<Map<string, PackParts>> {
+  const { results } = await db.prepare(PACK_BATCH_SQL).bind(JSON.stringify(areas)).all<PackParts>();
+  return new Map((results ?? []).map((r) => [String(r.area), r]));
+}
+
+function packFromParts(area: AreaId, parts: PackParts | undefined) {
+  const agg = parts?.agg ?? null;
+  const summary = areaSummaryFromRows(area, parts?.summary ?? null, agg ? { n: Number(agg.n), leakage: Number(agg.leakage) } : null);
+  return buildPack(area, summary, parts?.top ?? [], agg ? { n: Number(agg.n), leakage: agg.leakage_r2 } : null);
+}
+
+/**
+ * Warm the evidence-pack cache for several areas with one SQL round-trip (plus the cached rule
+ * read). Background jobs call this before a chunk so each recon step reads nothing.
+ */
+export async function primeAgentSummaries(db: AppDb, areas: AreaId[]): Promise<number> {
+  if (!areas.length) return 0;
+  const { activeReconConfig } = await import("./reconConfig");
+  const rules = await activeReconConfig(db);
+  const cfgs = rules.config.areas as Record<string, AreaRuleConfig>;
+  const todo = [...new Set(areas)].filter((a) => {
+    const hit = agentSummaryCache.get(`${a}:v${rules.version}`);
+    return !(hit && Date.now() - hit.at < AGENT_SUMMARY_TTL_MS) && !hasActiveTolerance(cfgs[a]);
+  });
+  if (!todo.length) return 0;
+  const parts = await fetchPackParts(db, todo);
+  for (const area of todo) {
+    const value: AgentDomainSummary = { ...packFromParts(area, parts.get(area)), rule_version: rules.version, match_thresholds: rules.config.global };
+    if (cfgs[area]) value.matching_keys = cfgs[area].matching_keys;
+    agentSummaryCache.set(`${area}:v${rules.version}`, { at: Date.now(), value });
+  }
+  return todo.length;
+}
+
 async function loadDomainSummaryForAgent(db: AppDb, area: AreaId) {
-  const [summary, topRes, agg] = await Promise.all([
-    summarizeArea(db, area),
-    db
-      .prepare("SELECT * FROM ra_exception_rows WHERE area = ? ORDER BY leakage DESC LIMIT 8")
-      .bind(area)
-      .all<Record<string, unknown>>(),
-    db
-      .prepare(
-        "SELECT COUNT(*)::int AS n, COALESCE(ROUND(SUM(leakage)::numeric, 2), 0) AS leakage FROM ra_exception_rows WHERE area = ?",
-      )
-      .bind(area)
-      .first<{ n: number; leakage: number | string }>(),
-  ]);
-  const top = (topRes.results ?? []).map(mapException);
+  const parts = await fetchPackParts(db, [area]);
+  return packFromParts(area, parts.get(area));
+}
+
+function buildPack(
+  area: AreaId,
+  summary: AreaSummary,
+  topRows: Record<string, unknown>[],
+  agg: { n: number; leakage: number | string } | null,
+) {
+  const top = topRows.map(mapException);
   const topLeakageSum = Math.round(top.reduce((sum, e) => sum + Number(e.leakage || 0), 0) * 100) / 100;
   return {
     area,

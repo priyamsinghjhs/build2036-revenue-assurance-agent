@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CHART, tooltipStyle } from "@/lib/chartTheme";
 import { inr, pct, prettyCat } from "@/lib/format";
+import { inrExact } from "../../shared/money";
 import { areaPath } from "@/lib/routes";
 import { useFilters } from "@/filters";
 import { cn } from "@/lib/utils";
@@ -112,11 +113,13 @@ export default function ExecutivePage() {
         <ExecHeroTile
           label="Revenue processed"
           value={inr(k.revenue, true)}
+          exact={inrExact(k.revenue)}
           hint={`${k.auth_count.toLocaleString("en-IN")} authorizations · match ${pct(k.match_rate)}`}
         />
         <ExecHeroTile
           label="Total leakage"
           value={inr(k.leakage, true)}
+          exact={inrExact(k.leakage)}
           hint={`${pct(k.leakage_pct)} of revenue`}
           tone="leak"
           spark={leakTrend}
@@ -140,6 +143,7 @@ export default function ExecutivePage() {
         <ExecHeroTile
           label="At risk"
           value={inr(k.recoverable, true)}
+          exact={inrExact(k.recoverable)}
           hint={`Recovered ${inr(k.recovered, true)} · written off ${inr(k.written_off, true)}`}
           tone="warn"
         />
@@ -157,10 +161,10 @@ export default function ExecutivePage() {
           </CardHeader>
           <CardContent>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <KpiCard label="Potential" value={inr(recovery.potential, true)} hint={`${recovery.n ?? 0} book exceptions · same set as Open exceptions`} />
-              <KpiCard label="Recovered (tracked)" value={inr(recovery.recovered, true)} hint={`${recovery.closed ?? 0} closed`} tone="ok" />
+              <KpiCard label="Potential" value={inr(recovery.potential, true)} exact={inrExact(recovery.potential)} hint={`${recovery.n ?? 0} book exceptions · same set as Open exceptions`} />
+              <KpiCard label="Recovered (tracked)" value={inr(recovery.recovered, true)} exact={inrExact(recovery.recovered)} hint={`${recovery.closed ?? 0} closed`} tone="ok" />
               <KpiCard label="Recovery rate" value={pct(recovery.recovery_rate, 2)} hint="recovered ÷ potential" />
-              <KpiCard label="Open" value={inr(recovery.open, true)} hint={`written off ${inr(recovery.written_off, true)} · ${recovery.overdue ?? 0} overdue`} tone="warn" />
+              <KpiCard label="Open" value={inr(recovery.open, true)} exact={inrExact(recovery.open)} hint={`written off ${inr(recovery.written_off, true)} · ${recovery.overdue ?? 0} overdue`} tone="warn" />
             </div>
           </CardContent>
         </Card>

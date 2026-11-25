@@ -3,7 +3,8 @@
  * chunking, leases, idempotent steps, retry of interrupted steps, final status.
  * Usage: npx tsx scripts/test-recon-jobs.ts
  */
-import { MAX_STEP_ATTEMPTS, jobFinalStatus, jobSequence, nextChunk, progress, type JobStep } from "../shared/reconJobs";
+import { MAX_STEP_ATTEMPTS, jobFinalStatus, jobSequence, nextChunk,
+  RECON_BATCH, progress, type JobStep } from "../shared/reconJobs";
 import { RUN_ALL_SEQUENCE, sequenceForDomain } from "../worker/agentRoster";
 
 function assert(cond: unknown, msg: string) {
@@ -44,11 +45,23 @@ function invoke(opts: { crashOn?: string } = {}) {
   return jobFinalStatus(steps);
 }
 
-// First chunk is the orchestrator alone; then recon steps in batches of up to 3.
-assert(nextChunk(steps).map((s) => s.agent_id).join() === "orchestrator", "chunk 1 is orchestrator");
+// First chunk: the orchestrator alongside the first RECON_BATCH recon steps; then recon batches;
+// narrative steps (gap, investigator, action, auditor) one at a time, in order.
+const c1 = nextChunk(steps);
+assert(c1[0].agent_id === "orchestrator" && c1.length === 1 + RECON_BATCH && c1.slice(1).every((s) => s.agent_id.startsWith("recon_")), "chunk 1 is orchestrator + a recon batch");
 invoke();
 const c2 = nextChunk(steps);
-assert(c2.length === 3 && c2.every((s) => s.agent_id.startsWith("recon_")), "chunk 2 is 3 recon steps");
+assert(c2.length >= 1 && c2.length <= RECON_BATCH && c2.every((s) => s.agent_id.startsWith("recon_")), "chunk 2 is recon steps only");
+// A narrative step never shares a chunk with anything else.
+const narrativeOnly = [
+  { seq: 1, agent_id: "gap_detection", status: "pending" as const, attempts: 0 },
+  { seq: 2, agent_id: "investigator", status: "pending" as const, attempts: 0 },
+];
+assert(nextChunk(narrativeOnly).map((s) => s.agent_id).join() === "gap_detection", "narrative steps run one at a time");
+assert(
+  nextChunk([{ seq: 1, agent_id: "gap_detection", status: "running", attempts: 1 }, { seq: 2, agent_id: "investigator", status: "pending", attempts: 0 }]).length === 0,
+  "no step starts while an earlier narrative step is running",
+);
 
 // Concurrent invocation is refused while the lease is held.
 leaseHeld = true;
@@ -57,9 +70,9 @@ leaseHeld = false;
 
 // A crash mid-chunk leaves steps running; the next invocation retries them once.
 invoke({ crashOn: c2[0].agent_id });
-assert(steps.filter((s) => s.status === "running").length === 3, "crashed steps still running");
+assert(steps.filter((s) => s.status === "running").length === c2.length, "crashed steps still running");
 let status = invoke();
-assert(steps.filter((s) => s.seq <= 4).every((s) => s.status === "done" && s.runs === 1), "retried steps ran exactly once to completion");
+assert(steps.filter((s) => s.seq <= 1 + RECON_BATCH + c2.length).every((s) => s.status === "done" && s.runs === 1), "retried steps ran exactly once to completion");
 let guard = 0;
 while (status === "running" && guard++ < 100) status = invoke();
 assert(status === "succeeded", `job succeeded (${status})`);
