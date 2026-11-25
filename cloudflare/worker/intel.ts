@@ -441,7 +441,7 @@ export async function listReviews(db: AppDb) {
        ORDER BY q.exception_id, q.started_at DESC`,
     )
     .all<Record<string, unknown>>();
-  const rows = (results ?? []).map((r) => {
+  const rows: Record<string, unknown>[] = (results ?? []).map((r) => {
     const hasException = r.has_exception === true || r.has_exception === 1 || r.has_exception === "t" || r.leakage != null;
     return {
       ...r,
