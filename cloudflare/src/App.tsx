@@ -276,7 +276,7 @@ export default function App() {
                       <Route path="/settings" element={<SettingsPage />} />
                       <Route path="/settings/data-sources" element={<DataSourcesPage />} />
                       <Route path="/settings/users" element={<UsersPage />} />
-                      <Route path="*" element={<Navigate to="/" replace />} />
+                      <Route path="/:slug" element={<AreaPage />} />
                     </Routes>
                   </AppShell>
                 </RequireAuth>
