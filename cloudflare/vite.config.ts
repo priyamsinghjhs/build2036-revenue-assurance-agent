@@ -14,6 +14,16 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/recharts") || id.includes("node_modules/d3")) return "charts";
+          if (id.includes("node_modules/@tanstack")) return "table";
+          if (id.includes("node_modules/react-router") || id.includes("node_modules/react-dom") || id.includes("node_modules/react/")) return "vendor";
+          if (id.includes("node_modules")) return "vendor-misc";
+        },
+      },
+    },
   },
   server: {
     proxy: {

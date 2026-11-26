@@ -70,7 +70,6 @@ import {
 import { withSecurityHeaders } from "./securityHeaders";
 import { registerExtraRoutes } from "./extraRoutes";
 import { sweepReconJobs } from "./reconJobs";
-import { runDailyCron } from "./cron";
 import { csrfMiddleware } from "./csrf";
 import { handleHealthz, handleHealthDetail } from "./health";
 
@@ -597,9 +596,6 @@ app.onError((err, c) => {
 export default {
   fetch: app.fetch,
   async scheduled(_event: unknown, env: Env, ctx: ExecutionContext) {
-    const work = runDailyCron(env);
-    ctx.waitUntil(work);
-    await work;
   },
 };
 

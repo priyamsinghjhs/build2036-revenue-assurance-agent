@@ -36,35 +36,11 @@ import {
   Database,
   Settings,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, lazy, Suspense, type ReactNode } from "react";
 import { AuthProvider, useAuth } from "@/auth";
 import LoginPage from "@/pages/LoginPage";
-import UsersPage from "@/pages/UsersPage";
 import { Users } from "lucide-react";
-import ExecutivePage from "@/pages/ExecutivePage";
-import AreaPage from "@/pages/AreaPage";
-import AgentsPage from "@/pages/AgentsPage";
-import InvestigatePage from "@/pages/InvestigatePage";
-import SystemMapPage from "@/pages/SystemMapPage";
-import ControlsPage from "@/pages/ControlsPage";
-import TracePage from "@/pages/TracePage";
-import NetworkRiskPage from "@/pages/NetworkRiskPage";
-import ContractsPage from "@/pages/ContractsPage";
-import AnomaliesPage from "@/pages/AnomaliesPage";
-import RoutingPage from "@/pages/RoutingPage";
-import AskPage from "@/pages/AskPage";
-import CasesPage from "@/pages/CasesPage";
-import RisksPage from "@/pages/RisksPage";
-import FilesPage from "@/pages/FilesPage";
-import IngestionPage from "@/pages/IngestionPage";
-import ReviewQueuePage from "@/pages/ReviewQueuePage";
-import ReviewPage from "@/pages/ReviewPage";
-import RecoveryPage from "@/pages/RecoveryPage";
-import ReconRulesPage from "@/pages/ReconRulesPage";
-import ModelsPage from "@/pages/ModelsPage";
-import OpenDataPage from "@/pages/OpenDataPage";
-import SettingsPage from "@/pages/SettingsPage";
-import DataSourcesPage from "@/pages/DataSourcesPage";
+import { AccessDenied } from "@/pages/AccessDenied";
 import { FilterProvider, useFilters } from "@/filters";
 import { Select } from "@/components/ui/select";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -73,6 +49,36 @@ import { cn } from "@/lib/utils";
 import { APP_NAME } from "@/brand";
 import { BrandMark } from "@/components/BrandMark";
 import { AppFooter } from "@/components/AppFooter";
+
+const LazyExecutive = lazy(() => import("@/pages/ExecutivePage"));
+const LazySystemMap = lazy(() => import("@/pages/SystemMapPage"));
+const LazyAgents = lazy(() => import("@/pages/AgentsPage"));
+const LazyInvestigate = lazy(() => import("@/pages/InvestigatePage"));
+const LazyControls = lazy(() => import("@/pages/ControlsPage"));
+const LazyTrace = lazy(() => import("@/pages/TracePage"));
+const LazyNetworkRisk = lazy(() => import("@/pages/NetworkRiskPage"));
+const LazyContracts = lazy(() => import("@/pages/ContractsPage"));
+const LazyAnomalies = lazy(() => import("@/pages/AnomaliesPage"));
+const LazyRouting = lazy(() => import("@/pages/RoutingPage"));
+const LazyAsk = lazy(() => import("@/pages/AskPage"));
+const LazyCases = lazy(() => import("@/pages/CasesPage"));
+const LazyRisks = lazy(() => import("@/pages/RisksPage"));
+const LazyFiles = lazy(() => import("@/pages/FilesPage"));
+const LazyIngestion = lazy(() => import("@/pages/IngestionPage"));
+const LazyReviewQueue = lazy(() => import("@/pages/ReviewQueuePage"));
+const LazyReview = lazy(() => import("@/pages/ReviewPage"));
+const LazyRecovery = lazy(() => import("@/pages/RecoveryPage"));
+const LazyReconRules = lazy(() => import("@/pages/ReconRulesPage"));
+const LazyModels = lazy(() => import("@/pages/ModelsPage"));
+const LazyOpenData = lazy(() => import("@/pages/OpenDataPage"));
+const LazySettings = lazy(() => import("@/pages/SettingsPage"));
+const LazyDataSources = lazy(() => import("@/pages/DataSourcesPage"));
+const LazyUsers = lazy(() => import("@/pages/UsersPage"));
+const LazyArea = lazy(() => import("@/pages/AreaPage"));
+
+function Page({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<p className="p-8 text-sm text-muted">Loading…</p>}>{children}</Suspense>;
+}
 
 const GROUPS = [
   {
@@ -279,7 +285,6 @@ const AREA_FILTER_SLUGS = new Set([
   "false-declines",
 ]);
 
-/** True only on Executive and Area pages, which honour merchant/scheme filters. */
 export function pathHonoursFilters(pathname: string): boolean {
   if (pathname === "/") return true;
   const slug = pathname.replace(/^\//, "").split("/")[0];
@@ -419,38 +424,46 @@ function Shell() {
           </header>
           <main id="main" className="mx-auto w-full max-w-6xl flex-1 p-4 md:p-8">
           <Routes>
-            <Route path="/" element={<ExecutivePage />} />
-            <Route path="/lifecycle" element={<SystemMapPage />} />
-            <Route path="/agents" element={<AgentsPage />} />
-            <Route path="/investigate" element={<InvestigatePage />} />
-            <Route path="/investigate/:exceptionId" element={<InvestigatePage />} />
-            <Route path="/controls" element={<ControlsPage />} />
-            <Route path="/trace" element={<TracePage />} />
-            <Route path="/network-risk" element={<NetworkRiskPage />} />
-            <Route path="/contracts" element={<ContractsPage />} />
-            <Route path="/anomalies" element={<AnomaliesPage />} />
-            <Route path="/routing" element={<RoutingPage />} />
-            <Route path="/models" element={<ModelsPage />} />
-            <Route path="/open-data" element={<OpenDataPage />} />
+            <Route path="/" element={<Page><LazyExecutive /></Page>} />
+            <Route path="/lifecycle" element={<Page><LazySystemMap /></Page>} />
+            <Route path="/agents" element={<Page><LazyAgents /></Page>} />
+            <Route path="/investigate" element={<Page><LazyInvestigate /></Page>} />
+            <Route path="/investigate/:exceptionId" element={<Page><LazyInvestigate /></Page>} />
+            <Route path="/controls" element={<Page><LazyControls /></Page>} />
+            <Route path="/trace" element={<Page><LazyTrace /></Page>} />
+            <Route path="/network-risk" element={<Page><LazyNetworkRisk /></Page>} />
+            <Route path="/contracts" element={<Page><LazyContracts /></Page>} />
+            <Route path="/anomalies" element={<Page><LazyAnomalies /></Page>} />
+            <Route path="/routing" element={<Page><LazyRouting /></Page>} />
+            <Route path="/models" element={<Page><LazyModels /></Page>} />
+            <Route path="/open-data" element={<Page><LazyOpenData /></Page>} />
             {can("settings") ? (
               <>
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="/settings/data-sources" element={<DataSourcesPage />} />
-                <Route path="/settings/data-sources/new/:connectorId" element={<DataSourcesPage />} />
-                <Route path="/settings/data-sources/c/:connectionId" element={<DataSourcesPage />} />
+                <Route path="/settings" element={<Page><LazySettings /></Page>} />
+                <Route path="/settings/data-sources" element={<Page><LazyDataSources /></Page>} />
+                <Route path="/settings/data-sources/new/:connectorId" element={<Page><LazyDataSources /></Page>} />
+                <Route path="/settings/data-sources/c/:connectionId" element={<Page><LazyDataSources /></Page>} />
               </>
-            ) : null}
-            {can("users") ? <Route path="/settings/users" element={<UsersPage />} /> : null}
-            <Route path="/ask" element={<AskPage />} />
-            <Route path="/cases" element={<CasesPage />} />
-            <Route path="/risks" element={<RisksPage />} />
-            <Route path="/files" element={<FilesPage />} />
-            <Route path="/ingestion" element={<IngestionPage />} />
-            <Route path="/review" element={<ReviewQueuePage />} />
-            <Route path="/review/:id" element={<ReviewPage />} />
-            <Route path="/recovery" element={<RecoveryPage />} />
-            {can("settings") || can("approve_review") ? <Route path="/recon-rules" element={<ReconRulesPage />} /> : null}
-            <Route path="/:slug" element={<AreaPage />} />
+            ) : (
+              <Route path="/settings/*" element={<AccessDenied feature="Settings" required="admin" />} />
+            )}
+            {can("users") ? <Route path="/settings/users" element={<Page><LazyUsers /></Page>} /> : (
+              <Route path="/settings/users" element={<AccessDenied feature="Users" required="admin" />} />
+            )}
+            <Route path="/ask" element={<Page><LazyAsk /></Page>} />
+            <Route path="/cases" element={<Page><LazyCases /></Page>} />
+            <Route path="/risks" element={<Page><LazyRisks /></Page>} />
+            <Route path="/files" element={<Page><LazyFiles /></Page>} />
+            <Route path="/ingestion" element={<Page><LazyIngestion /></Page>} />
+            <Route path="/review" element={<Page><LazyReviewQueue /></Page>} />
+            <Route path="/review/:id" element={<Page><LazyReview /></Page>} />
+            <Route path="/recovery" element={<Page><LazyRecovery /></Page>} />
+            {can("settings") || can("approve_review") ? (
+              <Route path="/recon-rules" element={<Page><LazyReconRules /></Page>} />
+            ) : (
+              <Route path="/recon-rules" element={<AccessDenied feature="Recon Rules" required="admin or approver" />} />
+            )}
+            <Route path="/:slug" element={<Page><LazyArea /></Page>} />
           </Routes>
           </main>
         </div>
