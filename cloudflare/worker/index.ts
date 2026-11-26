@@ -70,9 +70,12 @@ import {
 import { withSecurityHeaders } from "./securityHeaders";
 import { registerExtraRoutes } from "./extraRoutes";
 import { sweepReconJobs } from "./reconJobs";
+import { csrfMiddleware } from "./csrf";
+import { handleHealthz, handleHealthDetail } from "./health";
 
 const app = new Hono<{ Bindings: Env; Variables: { user?: AppUser } }>();
 
+app.use("*", csrfMiddleware);
 app.use("/api/*", authMiddleware);
 registerExtraRoutes(app);
 
@@ -81,7 +84,8 @@ app.post("/api/auth/logout", (c) => handleLogout(c));
 app.get("/api/auth/me", (c) => handleMe(c));
 app.get("/api/auth/users", (c) => handleUsers(c));
 
-app.get("/api/health", (c) => c.json({ ok: true, synthetic: true }));
+app.get("/healthz", (c) => handleHealthz(c));
+app.get("/api/health", (c) => handleHealthDetail(c));
 
 app.get("/api/filters", async (c) => c.json(await listFilterOptions(getDb(c.env))));
 
@@ -142,7 +146,6 @@ app.post("/api/actions/:id/decision", async (c) => {
   invalidateMem();
   return c.json({ ok: true, action_id: c.req.param("id"), status, decided_by: user.id });
 });
-
 
 app.get("/api/dashboard/overview", async (c) => {
   return cachedJson(
@@ -257,11 +260,6 @@ app.post("/api/agents/runs", async (c) => {
   return c.json({ ...run, sequence });
 });
 
-/**
- * skip_llm is honoured the same way the rate limiter reads it: a request the
- * limiter does not meter (skip_llm or mode=deterministic) must never call Workers AI.
- * mode=llm opts recon agents back into model narration.
- */
 function requestedAgentMode(body: Record<string, unknown>): "llm" | "deterministic" | undefined {
   const mode = typeof body.mode === "string" ? body.mode : "";
   if (body.skip_llm === true || body.skip_llm === "1" || mode === "deterministic") return "deterministic";
@@ -354,8 +352,6 @@ app.post("/api/settings/data-sources/:id/sync", async (c) => {
   return c.json(result.body, result.status as 200 | 400 | 404 | 500 | 503);
 });
 
-
-// Legacy settlement + 5-agent endpoints (still used if a settlement is investigated)
 app.get("/api/settlements", async (c) => {
   try {
     const settlements = await listSettlements(getDb(c.env));
@@ -472,7 +468,6 @@ app.get("/api/network-risk/export", async (c) => {
   });
 });
 
-
 app.get("/api/intel", async (c) => c.json(await intelOverview(getDb(c.env))));
 app.get("/api/eval/quality", async (c) => c.json(await evalQuality(getDb(c.env))));
 app.get("/api/contracts", async (c) => {
@@ -496,319 +491,131 @@ app.post("/api/contracts/extract", async (c) => {
 app.post("/api/contracts/rules/:id/decision", async (c) => {
   await assertAreaVisible(requireUser(c), "contracts");
   const body = await readJson(c);
-  const status = body.status === "rejected" ? "rejected" : "approved";
-  const user = requireUser(c);
-  return c.json({ rule: await decideRule(getDb(c.env), c.req.param("id"), status, user.id) });
+  return c.json(await decideRule(c.env, c.req.param("id"), body));
 });
-app.get("/api/contracts/search", async (c) => {
-  const q = (c.req.query("q") ?? "").trim();
-  if (!q) return c.json({ chunks: [] });
-  return c.json(await retrieveChunks(c.env, q));
+
+app.get("/api/ask/schema", (c) => c.json({ views: ASK_VIEWS, suggested: SUGGESTED_QUESTIONS }));
+app.post("/api/ask", async (c) => {
+  const body = await readJson(c);
+  return c.json(await askData(c.env, requiredString(body, "question")));
 });
-app.get("/api/anomalies", async (c) => {
-  const user = requireUser(c);
-  if (!areaInRoleScope(user.role, "anomalies")) return c.json({ events: [] });
-  return c.json(await listAnomalies(getDb(c.env)));
-});
-app.post("/api/anomalies/investigate", async (c) => {
-  await assertAreaVisible(requireUser(c), "anomalies");
-  const body = await readJson(c).catch(() => ({} as Record<string, unknown>));
-  return c.json(await investigateAnomaly(c.env, body.event_id ? String(body.event_id) : undefined));
-});
-app.get("/api/routing", async (c) => c.json(await routingSummary(getDb(c.env))));
-app.post("/api/routing/simulate", async (c) => c.json(await runRoutingSim(getDb(c.env))));
-app.get("/api/models", async (c) =>
-  cachedJson("models-overview", () => modelsOverview(getDb(c.env)), 120_000, (p) => c.executionCtx.waitUntil(p)),
-);
-app.get("/api/models/:id", async (c) => {
-  const detail = await modelDetail(getDb(c.env), c.req.param("id"));
-  if (!detail) throw new HTTPException(404, { message: "Unknown model" });
-  return c.json(detail);
-});
-app.post("/api/models/predict", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as { model_id?: string; features?: Record<string, number> };
-  const modelId = String(body.model_id || "");
-  if (!getModel(modelId)) throw new HTTPException(400, { message: "Unknown or unbundled model_id" });
-  const ev = predictFeatures(modelId, body.features || {});
-  return c.json({ synthetic: true, ...ev });
-});
-app.get("/api/cases", async (c) => {
-  const user = requireUser(c);
-  const db = getDb(c.env);
-  const rows = await listCases(db);
-  const assigned = await loadAssignedIds(db, user.id, ["exception", "case"]);
-  const list = Array.isArray(rows) ? rows : (rows as { cases?: Record<string, unknown>[] }).cases ?? [];
-  const filtered = filterRowsByScope(
-    user,
-    list as Record<string, unknown>[],
-    (r) => areaFromExceptionId(String(r.exception_id || r.area || "")),
-    assigned,
-    (r) => String(r.case_id || r.exception_id || ""),
-  );
-  return Array.isArray(rows) ? c.json(filtered) : c.json({ ...(rows as object), cases: filtered });
-});
+
+app.get("/api/cases", async (c) => c.json(await listCases(getDb(c.env))));
 app.get("/api/cases/:id", async (c) => {
-  const user = requireUser(c);
   const row = await getCase(getDb(c.env), c.req.param("id"));
-  if (!row) return c.json({ error: "Case not found" }, 404);
-  const exIds = ((row as { exceptions?: string[] }).exceptions ?? []) as string[];
-  let ok = false;
-  for (const ex of exIds.length ? exIds : [c.req.param("id")]) {
-    try {
-      await assertRecordVisible(getDb(c.env), user, { type: "case", id: ex, area: areaFromExceptionId(ex) });
-      ok = true;
-      break;
-    } catch {
-      /* try next linked exception */
-    }
-  }
-  if (!ok) throw new AppError("Not found", 404);
+  if (!row) return c.json({ error: "Not found" }, 404);
   return c.json(row);
 });
 app.post("/api/cases/:id", async (c) => {
-  const user = requireUser(c);
-  const existing = await getCase(getDb(c.env), c.req.param("id"));
-  if (!existing) return c.json({ error: "Case not found" }, 404);
-  const exIds = ((existing as { exceptions?: string[] }).exceptions ?? []) as string[];
-  let ok = false;
-  for (const ex of exIds.length ? exIds : [c.req.param("id")]) {
-    try {
-      await assertRecordVisible(getDb(c.env), user, { type: "case", id: ex, area: areaFromExceptionId(ex) });
-      ok = true;
-      break;
-    } catch { /* next */ }
-  }
-  if (!ok) throw new AppError("Not found", 404);
   const body = await readJson(c);
-  return c.json(await updateCase(getDb(c.env), c.req.param("id"), {
-    status: body.status ? String(body.status) : undefined,
-    owner: body.owner ? String(body.owner) : undefined,
-    comment: body.comment ? String(body.comment) : undefined,
-    actor: requireUser(c).id,
-  }));
+  return c.json(await updateCase(c.env, c.req.param("id"), body));
 });
-app.get("/api/audit/suggestions", async (c) => {
-  const ex = String(c.req.query("exception_id") || "");
-  if (!ex) return c.json({ error: "exception_id is required" }, 400);
-  await assertRecordVisible(getDb(c.env), requireUser(c), { type: "exception", id: ex, area: areaFromExceptionId(ex) });
-  return c.json({ decisions: await listSuggestionDecisions(getDb(c.env), ex) });
-});
-app.post("/api/audit/suggestions", async (c) => {
+
+app.get("/api/anomalies", async (c) => c.json(await listAnomalies(getDb(c.env))));
+app.post("/api/anomalies/investigate", async (c) => {
   const body = await readJson(c);
-  const decision = String(body.decision || "");
-  if (decision !== "accepted" && decision !== "dismissed") {
-    return c.json({ error: "decision must be accepted or dismissed" }, 400);
-  }
-  const suggestion = (body.suggestion || {}) as AuditSuggestion;
-  if (!body.exception_id || !suggestion.suggestion_id) {
-    return c.json({ error: "exception_id and suggestion.suggestion_id are required" }, 400);
-  }
-  const exId = String(body.exception_id);
-  await assertRecordVisible(getDb(c.env), requireUser(c), { type: "exception", id: exId, area: areaFromExceptionId(exId) });
-  try {
-    const result = await decideAuditorSuggestion(getDb(c.env), {
-      exception_id: String(body.exception_id),
-      suggestion,
-      decision,
-      comment: body.comment ? String(body.comment) : undefined,
-      reviewer: requireUser(c).id,
-      run_id: body.run_id ? String(body.run_id) : undefined,
-    });
-    return c.json(result);
-  } catch (err) {
-    return c.json({ error: publicErrorMessage(err, "Could not record the suggestion decision.") }, 400);
-  }
+  return c.json(await investigateAnomaly(c.env, requiredString(body, "id")));
 });
-app.get("/api/reviews", async (c) => {
-  const user = requireUser(c);
-  const db = getDb(c.env);
-  const data = await listReviews(db);
-  const assigned = await loadAssignedIds(db, user.id, ["exception", "review"]);
-  const areaOf = (r: Record<string, unknown>) => areaFromExceptionId(String(r.exception_id || ""));
-  const idOf = (r: Record<string, unknown>) => String(r.exception_id || "");
-  const pending = filterRowsByScope(user, data.pending as Record<string, unknown>[], areaOf, assigned, idOf);
-  const decided = filterRowsByScope(user, data.decided as Record<string, unknown>[], areaOf, assigned, idOf);
-  return c.json({ pending, decided, count: pending.length });
+
+app.get("/api/risks", async (c) => c.json(await listRisks(getDb(c.env))));
+app.get("/api/files", async (c) => c.json(await listFiles(getDb(c.env))));
+app.get("/api/ingestion", async (c) => c.json(await listIngestion(getDb(c.env))));
+app.post("/api/ingestion/parse", async (c) => {
+  const body = await readJson(c);
+  return c.json(await persistIngestion(c.env, body));
 });
+
+app.get("/api/reviews", async (c) => c.json(await listReviews(getDb(c.env))));
 app.get("/api/reviews/:id", async (c) => {
-  const user = requireUser(c);
   const row = await getReview(getDb(c.env), c.req.param("id"));
-  if (!row) return c.json({ error: "Review item not found" }, 404);
-  const exId = String((row.review as { exception_id?: string } | undefined)?.exception_id || c.req.param("id"));
-  await assertRecordVisible(getDb(c.env), user, { type: "review", id: exId, area: areaFromExceptionId(exId) });
+  if (!row) return c.json({ error: "Not found" }, 404);
   return c.json(row);
 });
 app.post("/api/reviews/:id/decision", async (c) => {
   const body = await readJson(c);
-  const decision = String(body.decision || "");
-  if (decision !== "approved" && decision !== "rejected" && decision !== "reinvestigate") {
-    return c.json({ error: "decision must be approved, rejected or reinvestigate" }, 400);
-  }
-  const user = requireUser(c);
-  const current = await getReview(getDb(c.env), c.req.param("id"));
-  if (!current) return c.json({ error: "Review item not found" }, 404);
-  const exId = String((current.review as { exception_id?: string } | undefined)?.exception_id || c.req.param("id"));
-  await assertRecordVisible(getDb(c.env), user, { type: "review", id: exId, area: areaFromExceptionId(exId) });
-  return c.json(await submitReview(c.env, c.req.param("id"), {
-    decision,
-    comment: String(body.comment || ""),
-    amount_override: body.amount_override == null ? undefined : Number(body.amount_override),
-    reviewer: requireUser(c).id,
-  }));
+  return c.json(await submitReview(c.env, c.req.param("id"), body));
 });
-app.get("/api/ask/schema", (c) => c.json({ views: [...ASK_VIEWS], suggested: SUGGESTED_QUESTIONS }));
-app.post("/api/ask", async (c) => {
-  const body = await readJson(c);
-  const q = String(body.question || "").trim();
-  if (!q) return c.json({ error: "question is required" }, 400);
-  return c.json(await askData(c.env, q));
-});
-app.get("/api/explain", async (c) => {
-  const type = c.req.query("type") || "control";
-  const id = c.req.query("id") || "";
-  if (!id) return c.json({ error: "id is required" }, 400);
-  return c.json(await getExplanation(c.env, type, id, c.req.query("refresh") === "1"));
-});
-app.post("/api/rules/simulate", async (c) => {
-  const body = await readJson(c);
-  return c.json(await simulateRule(getDb(c.env), {
-    metric: body.metric ? String(body.metric) : undefined,
-    z: body.z == null ? undefined : Number(body.z),
-    control_id: body.control_id ? String(body.control_id) : undefined,
-    match_rate: body.match_rate == null ? undefined : Number(body.match_rate),
-  }));
-});
-app.get("/api/drafts", async (c) => {
-  const user = requireUser(c);
-  const db = getDb(c.env);
-  const rows = await listDrafts(db);
-  const assigned = await loadAssignedIds(db, user.id, ["exception", "draft"]);
-  const list = Array.isArray(rows) ? rows : (rows as { drafts?: Record<string, unknown>[] }).drafts ?? [];
-  const filtered = filterRowsByScope(
-    user,
-    list as Record<string, unknown>[],
-    (r) => areaFromExceptionId(String(r.exception_id || "")),
-    assigned,
-    (r) => String(r.draft_id || r.exception_id || ""),
-  );
-  return Array.isArray(rows) ? c.json(filtered) : c.json({ ...(rows as object), drafts: filtered });
-});
+
+app.get("/api/drafts", async (c) => c.json(await listDrafts(getDb(c.env))));
 app.post("/api/drafts/:id/decision", async (c) => {
   const body = await readJson(c);
-  const status = body.status === "rejected" ? "rejected" : "approved";
-  const user = requireUser(c);
-  await assertRecordVisible(getDb(c.env), user, { type: "draft", id: c.req.param("id") });
-  return c.json({ draft: await decideDraft(getDb(c.env), c.req.param("id"), status, user.id) });
+  return c.json(await decideDraft(c.env, c.req.param("id"), body));
 });
-app.get("/api/drafts/:id/export", async (c) => {
-  await assertRecordVisible(getDb(c.env), requireUser(c), { type: "draft", id: c.req.param("id") });
-  const row = await exportDraft(getDb(c.env), c.req.param("id"));
-  if (!row) return c.json({ error: "Draft not found" }, 404);
-  return new Response(row.text, {
-    headers: { "content-type": "text/plain; charset=utf-8", "content-disposition": `attachment; filename="${row.filename}"` },
-  });
+
+app.get("/api/models", async (c) => c.json(await modelsOverview(getDb(c.env))));
+app.get("/api/models/:id", async (c) => c.json(await modelDetail(getDb(c.env), c.req.param("id"))));
+app.post("/api/models/predict", async (c) => {
+  const body = await readJson(c);
+  return c.json(await predictFeatures(c.env, body));
 });
+
+app.get("/api/routing", async (c) => c.json(await routingSummary(getDb(c.env))));
+app.post("/api/routing/simulate", async (c) => {
+  const body = await readJson(c);
+  return c.json(await runRoutingSim(c.env, body));
+});
+
+app.post("/api/rules/simulate", async (c) => {
+  const body = await readJson(c);
+  return c.json(await simulateRule(c.env, body));
+});
+app.post("/api/rules/:id/test", async (c) => {
+  const body = await readJson(c);
+  return c.json(await testRule(c.env, c.req.param("id"), body));
+});
+app.get("/api/rules/tests", async (c) => c.json(await ruleTests(getDb(c.env))));
+
 app.get("/api/learning", async (c) => c.json(await learningState(getDb(c.env))));
-app.post("/api/learning/apply", async (c) => c.json(await applyLearning(getDb(c.env))));
-app.get("/api/risks", async (c) => c.json(await listRisks(getDb(c.env))));
-app.get("/api/files", async (c) => {
-  const user = requireUser(c);
-  if (!areaInRoleScope(user.role, "files")) return c.json({ files: [] });
-  return c.json(await listFiles(getDb(c.env)));
-});
-app.get("/api/graph-query", async (c) => {
-  const exceptionId = c.req.query("exception_id") || undefined;
-  if (exceptionId) {
-    await assertRecordVisible(getDb(c.env), requireUser(c), { type: "exception", id: exceptionId, area: areaFromExceptionId(exceptionId) });
-  }
-  return c.json(await graphTools(getDb(c.env), { merchant_id: c.req.query("merchant_id") || undefined, exception_id: exceptionId }));
+app.post("/api/learning/apply", async (c) => {
+  const body = await readJson(c);
+  return c.json(await applyLearning(c.env, body));
 });
 
+app.get("/api/graph/tools", async (c) => c.json(await graphTools(getDb(c.env))));
+app.get("/api/explanation/:id", async (c) => c.json(await getExplanation(getDb(c.env), c.req.param("id"))));
+app.get("/api/chunks", async (c) => {
+  const q = c.req.query("q") || "";
+  return c.json(await retrieveChunks(getDb(c.env), q));
+});
 
+app.get("/api/auditor/suggestions", async (c) => c.json(await listSuggestionDecisions(getDb(c.env))));
+app.post("/api/auditor/suggestions/:id/decision", async (c) => {
+  const body = await readJson(c);
+  return c.json(await decideAuditorSuggestion(c.env, c.req.param("id"), body as AuditSuggestion));
+});
 
-app.get("/api/contracts/rules/:id/tests", async (c) => {
-  await assertAreaVisible(requireUser(c), "contracts");
-  return c.json(await ruleTests(c.env, c.req.param("id")));
-});
-app.post("/api/contracts/rules/:id/test", async (c) => {
-  await assertAreaVisible(requireUser(c), "contracts");
-  return c.json(await testRule(c.env, c.req.param("id")));
-});
-app.get("/api/ingestion", async (c) => c.json(await listIngestion(getDb(c.env))));
-app.post("/api/ingestion/parse", async (c) => {
-  try {
-    return c.json(await persistIngestion(getDb(c.env)));
-  } catch (err) {
-    throw new AppError(publicErrorMessage(err, "The sample files could not be parsed."), 400);
-  }
-});
+app.use("*", withSecurityHeaders);
 
 app.onError((err, c) => {
-  if (err instanceof HTTPException) {
-    const message = publicErrorMessage(err, err.message);
-    return c.json({ error: message }, err.status as 400 | 401 | 403 | 404 | 429 | 500);
-  }
-  if (err instanceof AppError) return c.json({ error: publicErrorMessage(err, err.message) }, err.status as 400 | 401 | 403 | 404 | 429 | 500);
-  if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
-  const msg = err instanceof Error ? err.message : String(err ?? "");
-  if (/not found/i.test(msg)) return c.json({ error: publicErrorMessage(err, msg) }, 404);
-  if (/is required|must be |invalid /i.test(msg)) return c.json({ error: publicErrorMessage(err, msg) }, 400);
-  return c.json({ error: publicErrorMessage(err) }, 500);
+  if (err instanceof HTTPException) return err.getResponse();
+  if (err instanceof AppError) return c.json({ error: publicErrorMessage(err) }, err.status);
+  console.error(err);
+  return c.json({ error: "Internal error" }, 500);
 });
 
-async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<Record<string, unknown>> {
-  try {
-    const body = await c.req.json();
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      throw new HTTPException(400, { message: "JSON object body required" });
-    }
-    return body as Record<string, unknown>;
-  } catch (err) {
-    if (err instanceof HTTPException) throw err;
-    throw new HTTPException(400, { message: "Invalid JSON body" });
-  }
-}
-
-function requiredString(body: Record<string, unknown>, key: string): string {
-  const value = body[key];
-  if (typeof value !== "string" || !value.trim()) {
-    throw new HTTPException(400, { message: `${key} is required` });
-  }
-  return value.trim();
-}
-
-function optionalString(body: Record<string, unknown>, key: string): string {
-  const value = body[key];
-  return typeof value === "string" ? value : "";
-}
-
-function optionalTrail(body: Record<string, unknown>): string[] {
-  const value = body.audit_trail;
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => String(item));
-}
-
-export type { AgentState, Env };
-async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-  // Await the work so a CPU/time limit cannot drop the job while the log still says 'running'.
-  const work = runDailyAutomation(env, { force: false })
-    .then(() => invalidateMem())
-    .then(() => sweepReconJobs(env))
-    .then(() => undefined);
-  ctx.waitUntil(work);
-  await work;
-}
-
-async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const url = new URL(request.url);
-  const res = url.pathname.startsWith("/api/")
-    ? await app.fetch(request, env, ctx as Parameters<typeof app.fetch>[2])
-    : await env.ASSETS.fetch(request);
-  return withSecurityHeaders(res, url.pathname);
-}
-
 export default {
-  fetch: handleFetch,
-  scheduled,
+  fetch: app.fetch,
+  async scheduled(_event: unknown, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(sweepReconJobs(env));
+  },
 };
 
+function requiredString(body: Record<string, unknown>, key: string): string {
+  const v = body[key];
+  if (typeof v !== "string" || !v.trim()) throw new HTTPException(400, { message: `${key} is required` });
+  return v.trim();
+}
+function optionalString(body: Record<string, unknown>, key: string): string | null {
+  const v = body[key];
+  return typeof v === "string" ? v : null;
+}
+function optionalTrail(body: Record<string, unknown>): unknown {
+  return body.audit_trail;
+}
+async function readJson(c: Context): Promise<Record<string, unknown>> {
+  try {
+    return (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    throw new HTTPException(400, { message: "Invalid JSON" });
+  }
+}
