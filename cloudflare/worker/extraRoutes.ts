@@ -12,6 +12,7 @@ import { handleIngestFile } from "./parsers";
 import { decideRules, getRuleHistory, getRules, proposeRules } from "./reconConfig";
 import { recoveryItem, recoveryList, recoverySummary, recoveryTransition } from "./recovery";
 import { createReconJob, getReconJob, listReconJobs } from "./reconJobs";
+import { reconcileRange } from "./incrementalRecon";
 
 type App = Hono<{ Bindings: Env; Variables: { user?: AppUser } }>;
 
@@ -61,6 +62,18 @@ export function registerExtraRoutes(app: App) {
   app.post("/api/rules", (c) => upsertRule(c));
 
   app.post("/api/ingest/file", (c) => handleIngestFile(c));
+
+  app.post("/api/recon/incremental", async (c) => {
+    requireUser(c);
+    const body = await c.req.json().catch(() => ({}));
+    const result = await reconcileRange(c.env, {
+      area: body.area || "all",
+      from: body.from,
+      to: body.to,
+      force: body.force === true,
+    });
+    return c.json(result);
+  });
 
   app.get("/api/sla", async (c) => {
     requireUser(c);

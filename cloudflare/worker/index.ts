@@ -596,7 +596,6 @@ app.onError((err, c) => {
 export default {
   fetch: app.fetch,
   async scheduled(_event: unknown, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(sweepReconJobs(env));
   },
 };
 
